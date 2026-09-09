@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Production Report{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3><i class="fa-solid fa-file-lines"></i> Production Report</h3>
+    <div>
+        <a href="{% url 'reports:export_excel' %}{% if report_export_query %}?{{ report_export_query }}{% endif %}" class="btn btn-success"><i class="fa-solid fa-file-excel"></i> Export Excel</a>
+        <a href="{% url 'reports:export_pdf' %}{% if report_export_query %}?{{ report_export_query }}{% endif %}" class="btn btn-danger"><i class="fa-solid fa-file-pdf"></i> Export PDF</a>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <form method="get" class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label for="date-from" class="form-label">From date</label>
+                <input type="date" id="date-from" name="date_from" value="{{ selected_date_from }}" class="form-control">
+            </div>
+            <div class="col-md-4">
+                <label for="date-to" class="form-label">To date</label>
+                <input type="date" id="date-to" name="date_to" value="{{ selected_date_to }}" class="form-control">
+            </div>
+            <div class="col-md-4 d-flex gap-2">
+                <button type="submit" class="btn btn-primary"><i class="fa-solid fa-filter"></i> Filter</button>
+                <a href="{% url 'reports:production_report' %}" class="btn btn-outline-secondary">Clear</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body table-responsive">
+        <table id="reportTable" class="table table-striped table-hover">
+            <thead>
+                <tr>
+                    <th>Date</th><th>Line</th><th>Order</th><th>Style</th><th>SAM</th><th>Manpower</th><th>Working Min</th><th>Available Min</th>
+                    <th>Actual Output</th><th>Target Output</th>
+                    <th>Planned Eff %</th><th>Actual Eff %</th><th>Forecast / Day</th><th>Expected Completion</th><th>Gain/Loss Min</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in entries %}
+                <tr>
+                    <td data-order="{{ entry.production_date|date:'Y-m-d' }}">{{ entry.production_date|date:'d M Y' }}</td>
+                    <td>{{ entry.assignment.production_line }}</td>
+                    <td>{{ entry.assignment.production_order.order_number }}</td>
+                    <td>{{ entry.assignment.production_order.article.article_code }}</td>
+                    <td>{{ entry.sam|floatformat:2 }}</td>
+                    <td>{{ entry.actual_manpower }}</td>
+                    <td>{{ entry.working_minutes }}</td>
+                    <td>{{ entry.available_minutes|floatformat:2 }}</td>
+                    <td>{{ entry.actual_output }}</td>
+                    <td>{{ entry.target_output|floatformat:0 }}</td>
+                    <td>{{ entry.planned_efficiency_percent|floatformat:2 }}%</td>
+                    <td>{{ entry.actual_efficiency_percent|floatformat:2 }}%</td>
+                    <td>{{ entry.assignment.forecast_daily_output|floatformat:0 }}</td>
+                    <td>{{ entry.assignment.expected_completion_date }}</td>
+                    <td class="fw-bold {% if entry.gain_loss_minutes > 0 %}text-success{% else %}text-danger{% endif %}">{{ entry.gain_loss_minutes|floatformat:2 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>$(document).ready(function () { $('#reportTable').DataTable({ order: [[0, 'desc']] }); });</script>
+{% endblock %}

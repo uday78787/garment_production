@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Production Entries{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3><i class="fa-solid fa-list-check"></i> Daily Production Entries</h3>
+    <a href="{% url 'production:entry_create' %}" class="btn btn-primary"><i class="fa-solid fa-plus"></i> New Entry</a>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <form method="get" class="row g-2 align-items-end">
+            <div class="col-md-3">
+                <label for="date" class="form-label">Date</label>
+                <input type="date" id="date" name="date" value="{{ selected_date }}" class="form-control">
+            </div>
+            <div class="col-md-3">
+                <label for="month" class="form-label">Month</label>
+                <input type="month" id="month" name="month" value="{{ selected_month }}" class="form-control">
+            </div>
+            <div class="col-md-3">
+                <label for="line" class="form-label">Line</label>
+                <select id="line" name="line" class="form-select">
+                    <option value="">All Lines</option>
+                    {% for line in lines %}
+                    <option value="{{ line.pk }}" {% if selected_line_id == line.pk|stringformat:"s" %}selected{% endif %}>{{ line.line_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="article" class="form-label">Article</label>
+                <select id="article" name="article" class="form-select">
+                    <option value="">All Articles</option>
+                    {% for article in articles %}
+                    <option value="{{ article.pk }}" {% if selected_article_id == article.pk|stringformat:"s" %}selected{% endif %}>{{ article.article_code }} - {{ article.article_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-1 d-flex gap-2">
+                <button type="submit" class="btn btn-primary">Filter</button>
+                <a href="{% url 'production:entry_list' %}" class="btn btn-outline-secondary">Clear</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body table-responsive">
+        <table id="entriesTable" class="table table-striped table-hover">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Line</th>
+                    <th>Order</th>
+                    <th>SAM</th>
+                    <th>Manpower</th>
+                    <th>Working Min</th>
+                    <th>Available Min</th>
+                    <th>Actual Output</th>
+                    <th>Target Output</th>
+                    <th>Planned Eff %</th>
+                    <th>Actual Eff %</th>
+                    <th>Gain/Loss Min</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in entries %}
+                <tr>
+                    <td data-order="{{ entry.production_date|date:'Y-m-d' }}">{{ entry.production_date|date:'d M Y' }}</td>
+                    <td>{{ entry.assignment.production_line }}</td>
+                    <td>{{ entry.assignment.production_order.order_number }}</td>
+                    <td>{{ entry.sam|floatformat:2 }}</td>
+                    <td>{{ entry.actual_manpower }}</td>
+                    <td>{{ entry.working_minutes }}</td>
+                    <td>{{ entry.available_minutes|floatformat:2 }}</td>
+                    <td>{{ entry.actual_output }}</td>
+                    <td>{{ entry.target_output|floatformat:0 }}</td>
+                    <td>{{ entry.planned_efficiency_percent|floatformat:2 }}%</td>
+                    <td>{{ entry.actual_efficiency_percent|floatformat:2 }}%</td>
+                    <td class="fw-bold {% if entry.gain_loss_minutes > 0 %}text-success{% else %}text-danger{% endif %}">
+                        {{ entry.gain_loss_minutes|floatformat:2 }}
+                    </td>
+                    <td>
+                        <a href="{% url 'production:entry_edit' entry.pk %}" class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-pen"></i></a>
+                        {% if user.is_superuser %}<a href="{% url 'production:entry_delete' entry.pk %}" class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash"></i></a>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function () {
+    $('#entriesTable').DataTable({ order: [[0, 'desc']] });
+});
+</script>
+{% endblock %}

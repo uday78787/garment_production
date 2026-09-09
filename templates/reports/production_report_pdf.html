@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+    body { font-family: Helvetica, Arial, sans-serif; font-size: 11px; }
+    h2 { margin-bottom: 0; }
+    p.meta { color: #666; margin-top: 4px; }
+    .report-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+    .report-header img { width: 52px; height: 52px; }
+    .brand-name { font-size: 18px; font-weight: bold; }
+    .location { color: #555; margin-top: 3px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; }
+    th { background: #f0f0f0; }
+</style>
+</head>
+<body>
+    <div class="report-header">
+        <img src="{{ logo_uri }}" alt="ProdVanta logo">
+        <div><div class="brand-name">ProdVanta</div><div>Production Report</div><div class="location">Location: {{ location_name }}</div></div>
+    </div>
+    <p class="meta">Generated at {{ generated_at }}</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th><th>Line</th><th>Order</th><th>Style</th><th>SAM</th><th>Manpower</th><th>Working Min</th><th>Available Min</th>
+                <th>Actual Output</th><th>Target Output</th>
+                <th>Planned Eff %</th><th>Actual Eff %</th><th>Forecast / Day</th><th>Expected Completion</th><th>Gain/Loss Min</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in entries %}
+            <tr>
+                <td>{{ entry.production_date }}</td>
+                <td>{{ entry.assignment.production_line }}</td>
+                <td>{{ entry.assignment.production_order.order_number }}</td>
+                <td>{{ entry.assignment.production_order.article.article_code }}</td>
+                <td>{{ entry.sam|floatformat:2 }}</td>
+                <td>{{ entry.actual_manpower }}</td>
+                <td>{{ entry.working_minutes }}</td>
+                <td>{{ entry.available_minutes|floatformat:2 }}</td>
+                <td>{{ entry.actual_output }}</td>
+                <td>{{ entry.target_output|floatformat:0 }}</td>
+                <td>{{ entry.planned_efficiency_percent|floatformat:2 }}%</td>
+                <td>{{ entry.actual_efficiency_percent|floatformat:2 }}%</td>
+                <td>{{ entry.assignment.forecast_daily_output|floatformat:0 }}</td>
+                <td>{{ entry.assignment.expected_completion_date }}</td>
+                <td style="font-weight: bold; color: {% if entry.gain_loss_minutes > 0 %}#198754{% else %}#dc3545{% endif %};">{{ entry.gain_loss_minutes|floatformat:2 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>

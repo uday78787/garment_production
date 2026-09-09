@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Select Factory{% endblock %}
+{% block content %}
+<div class="modal fade" id="factorySelector" tabindex="-1" aria-labelledby="factorySelectorLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="factorySelectorLabel"><i class="fa-solid fa-building"></i> Select Factory</h5>
+        <a href="{% url 'dashboard:admin_dashboard' %}" class="btn-close" aria-label="Close"></a>
+      </div>
+      <div class="modal-body">
+        {% if factories %}
+        <form method="post">
+          {% csrf_token %}
+          <div class="row g-2">
+            {% for factory in factories %}
+            <div class="col-12">
+              <input class="btn-check" type="radio" name="factory_id" id="factory-{{ factory.pk }}" value="{{ factory.pk }}" {% if factory.pk == selected_factory_id %}checked{% endif %} required>
+              <label class="btn btn-outline-primary w-100 text-start p-3" for="factory-{{ factory.pk }}">
+                <strong><i class="fa-solid fa-building"></i> {{ factory.name }}</strong><br><small>{{ factory.code }}{% if factory.city %} &middot; {{ factory.city }}{% endif %}</small>
+              </label>
+            </div>
+            {% endfor %}
+          </div>
+          <button type="submit" class="btn btn-primary w-100 mt-3"><i class="fa-solid fa-check"></i> Use Factory</button>
+        </form>
+        {% else %}
+        <div class="alert alert-info mb-0">No active factories exist yet.</div>
+        {% endif %}
+      </div>
+      {% if not factories %}
+      {% if user.is_superuser or user.profile.is_admin %}
+      <div class="modal-footer">
+        <a href="{% url 'admin:master_data_factory_add' %}" class="btn btn-primary"><i class="fa-solid fa-plus"></i> Add Factory</a>
+      </div>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+<div class="d-flex justify-content-center">
+  <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#factorySelector">Open Factory Selector</button>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+  new bootstrap.Modal(document.getElementById('factorySelector')).show();
+</script>
+{% endblock %}

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}My Dashboard{% endblock %}
+{% block content %}
+<h3><i class="fa-solid fa-gauge"></i> My Dashboard</h3>
+<p class="text-muted">Production overview for your assigned lines {% if selected_date_from or selected_date_to %}(filtered){% else %}(last 14 days){% endif %}.</p>
+
+<div class="d-flex justify-content-end mb-3">
+    <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#dateFilterModal">
+        <i class="fa-solid fa-calendar-days"></i> Date Filter
+    </button>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card text-bg-primary shadow-sm">
+            <div class="card-body">
+                <div class="fs-4">{{ kpi_total_output|floatformat:0 }}</div>
+                <div>Total Output (pcs)</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-bg-success shadow-sm">
+            <div class="card-body">
+                <div class="fs-4">{{ kpi_avg_efficiency }}%</div>
+                <div>Average Efficiency</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-md-6">
+        <div class="card shadow-sm"><div class="card-body">
+            <h6 class="card-title">Daily Output</h6>
+            <canvas id="outputChart"></canvas>
+        </div></div>
+    </div>
+    <div class="col-md-6">
+        <div class="card shadow-sm"><div class="card-body">
+            <h6 class="card-title">Average Efficiency %</h6>
+            <canvas id="efficiencyChart"></canvas>
+        </div></div>
+    </div>
+</div>
+{% endblock %}
+<div class="modal fade" id="dateFilterModal" tabindex="-1" aria-labelledby="dateFilterModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="dateFilterModalLabel"><i class="fa-solid fa-calendar-days"></i> Filter by Date</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="get">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="date-from" class="form-label">From date</label>
+                        <input type="date" id="date-from" name="date_from" class="form-control" value="{{ selected_date_from }}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="date-to" class="form-label">To date</label>
+                        <input type="date" id="date-to" name="date_to" class="form-control" value="{{ selected_date_to }}">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <a href="{% url 'dashboard:user_dashboard' %}" class="btn btn-outline-secondary">Clear</a>
+                    <button type="submit" class="btn btn-primary"><i class="fa-solid fa-filter"></i> Apply Date</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% block extra_js %}
+<script>
+const labels = {{ chart_labels|safe }};
+new Chart(document.getElementById('outputChart'), {
+    type: 'bar',
+    data: { labels: labels, datasets: [{ label: 'Output (pcs)', data: {{ chart_output_series|safe }}, backgroundColor: '#0d6efd' }] },
+    options: { responsive: true }
+});
+new Chart(document.getElementById('efficiencyChart'), {
+    type: 'line',
+    data: { labels: labels, datasets: [{ label: 'Efficiency %', data: {{ chart_efficiency_series|safe }}, borderColor: '#198754', tension: 0.3 }] },
+    options: { responsive: true }
+});
+</script>
+{% endblock %}

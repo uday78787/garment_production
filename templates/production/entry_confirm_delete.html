@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Delete Production Entry{% endblock %}
+{% block content %}
+<div class="card border-danger shadow-sm">
+    <div class="card-body">
+        <h3 class="text-danger"><i class="fa-solid fa-triangle-exclamation"></i> Delete Production Entry</h3>
+        <p>Are you sure you want to delete the entry for <strong>{{ object.production_date }}</strong> on <strong>{{ object.assignment.production_line }}</strong>?</p>
+        <form method="post">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-danger"><i class="fa-solid fa-trash"></i> Delete Entry</button>
+            <a href="{% url 'production:entry_list' %}" class="btn btn-outline-secondary">Cancel</a>
+        </form>
+    </div>
+</div>
+{% endblock %}

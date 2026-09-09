@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.log
+check-output.txt
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Django
+db.sqlite3
+media/
+staticfiles/
+
+# Secrets
+.env
+.env.*
+!.env.example
+!.env.uat.example
+*.pem
+*.key
+
+# Docker backups
+docker/backups/*.sql
+
+# Editor
+.vscode/
+.idea/
+
+# Local nested repository placeholders
+Production Forecasting Dashboard/
+Production Forecasting and Planning Dashboard/
