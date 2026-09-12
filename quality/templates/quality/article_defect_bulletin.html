@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}Article Defect Bulletin{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3>Article Defect Bulletin</h3>
+    <div class="btn-group">
+      <a href="{% url 'quality:export_article_defect_bulletin_excel' %}" class="btn btn-success">Export Excel</a>
+      <a href="{% url 'quality:export_article_defect_bulletin_pdf' %}" class="btn btn-outline-primary">Export PDF</a>
+    </div>
+  </div>
+  <div class="card border-0 shadow-sm">
+    <div class="card-body">
+      <table class="table table-bordered table-striped">
+        <thead>
+          <tr>
+            <th>Inspection</th>
+            <th>Order</th>
+            <th>Line</th>
+            <th>Inspected</th>
+            <th>Passed</th>
+            <th>Rejected</th>
+            <th>DHU</th>
+            <th>FPY</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for inspection in inspections %}
+          <tr>
+            <td>{{ inspection.inspection_number }}</td>
+            <td>{{ inspection.production_order }}</td>
+            <td>{{ inspection.production_line }}</td>
+            <td>{{ inspection.inspected_quantity }}</td>
+            <td>{{ inspection.passed_quantity }}</td>
+            <td>{{ inspection.rejected_quantity }}</td>
+            <td>{{ inspection.dhu|floatformat:2 }}%</td>
+            <td>{{ inspection.fpy|floatformat:2 }}%</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="8" class="text-center text-muted">No bulletin data available.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -21,6 +21,7 @@ class UserProfile(models.Model):
         FACTORY_ADMIN = "FACTORY_ADMIN", "Factory Admin"
         DASHBOARD_VIEWER = "DASHBOARD_VIEWER", "Dashboard Viewer"
         SUPERVISOR = "SUPERVISOR", "Supervisor"
+        QA_PERMISSION = "QA_PERMISSION", "QA Permission"
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile"

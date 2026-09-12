@@ -225,7 +225,12 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
         context["chart_labels"] = json.dumps(labels)
         context["chart_output_series"] = json.dumps(output_series)
         context["chart_efficiency_series"] = json.dumps(efficiency_series)
-        context["kpi_total_output"] = sum(output_series)
+        total_output = sum(output_series)
+        total_defects = sum(float(row["defect_pieces"] or 0) for row in entries.values("defect_pieces"))
+        dhu = (total_defects / total_output * 100) if total_output else 0
+        context["kpi_total_output"] = total_output
+        context["kpi_total_defects"] = total_defects
+        context["kpi_dhu"] = round(dhu, 2)
         context["kpi_avg_efficiency"] = round(sum(efficiency_series) / len(efficiency_series), 2) if efficiency_series else 0
 
         style_ids = self.get_filtered_entries().values_list(

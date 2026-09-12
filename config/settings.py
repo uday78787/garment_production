@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "dashboard",
     "reports",
     "common",
+    "quality",
 ]
 
 MIDDLEWARE = [

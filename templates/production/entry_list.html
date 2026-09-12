@@ -56,6 +56,8 @@
                     <th>Working Min</th>
                     <th>Available Min</th>
                     <th>Actual Output</th>
+                    <th>Defect Pcs</th>
+                    <th>DHU</th>
                     <th>Target Output</th>
                     <th>Planned Eff %</th>
                     <th>Actual Eff %</th>
@@ -74,6 +76,8 @@
                     <td>{{ entry.working_minutes }}</td>
                     <td>{{ entry.available_minutes|floatformat:2 }}</td>
                     <td>{{ entry.actual_output }}</td>
+                    <td>{{ entry.defect_pieces }}</td>
+                    <td>{{ entry.dhu|floatformat:2 }}%</td>
                     <td>{{ entry.target_output|floatformat:0 }}</td>
                     <td>{{ entry.planned_efficiency_percent|floatformat:2 }}%</td>
                     <td>{{ entry.actual_efficiency_percent|floatformat:2 }}%</td>

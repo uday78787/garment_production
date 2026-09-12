@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% block title %}Quality Dashboard{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Quality Dashboard</h2>
+    <div class="btn-group">
+      <a class="btn btn-primary" href="{% url 'quality:inspection_create' %}">New Inspection</a>
+      <a class="btn btn-outline-secondary" href="{% url 'quality:article_defect_bulletin' %}">Bulletin</a>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Inspected Qty</small><h4>{{ total_inspected }}</h4></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Passed Qty</small><h4>{{ total_passed }}</h4></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Rejected Qty</small><h4>{{ total_rejected }}</h4></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">DHU</small><h4>{{ dhu|floatformat:2 }}%</h4></div></div></div>
+  </div>
+
+  <div class="card shadow-sm border-0">
+    <div class="card-body">
+      <h5 class="card-title">Recent Inspections</h5>
+      <table class="table table-striped table-hover">
+        <thead>
+          <tr>
+            <th>Inspection</th>
+            <th>Line</th>
+            <th>Order</th>
+            <th>Inspected</th>
+            <th>Passed</th>
+            <th>DHU</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for inspection in inspections %}
+          <tr>
+            <td>{{ inspection.inspection_number }}</td>
+            <td>{{ inspection.production_line }}</td>
+            <td>{{ inspection.production_order }}</td>
+            <td>{{ inspection.inspected_quantity }}</td>
+            <td>{{ inspection.passed_quantity }}</td>
+            <td>{{ inspection.dhu|floatformat:2 }}%</td>
+            <td><span class="badge bg-success">{{ inspection.status }}</span></td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7" class="text-center text-muted">No inspections found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

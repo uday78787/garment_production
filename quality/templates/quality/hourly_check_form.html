@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+{% block title %}Hourly Quality Check{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3>Hourly End-of-Line Quality Check</h3>
+    <a href="{% url 'quality:hourly_check_list' %}" class="btn btn-outline-secondary">Back</a>
+  </div>
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <div class="row g-3">
+      <div class="col-md-3">
+        <label class="form-label">Factory</label>
+        <select name="factory" class="form-select" required>
+          <option value="">Select factory</option>
+          {% for factory in factories %}
+          <option value="{{ factory.id }}">{{ factory.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Production Line</label>
+        <select name="production_line" class="form-select" required>
+          <option value="">Select line</option>
+          {% for line in production_lines %}
+          <option value="{{ line.id }}">{{ line.factory.name }} - {{ line.line_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Production Order</label>
+        <select name="production_order" class="form-select" required>
+          <option value="">Select order</option>
+          {% for order in production_orders %}
+          <option value="{{ order.id }}">{{ order.order_number }} - {{ order.article.article_code }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Article</label>
+        <select name="article" class="form-select" required>
+          <option value="">Select article</option>
+          {% for article in articles %}
+          <option value="{{ article.id }}">{{ article.article_code }} - {{ article.article_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Check Date</label>
+        <input type="date" name="check_date" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Hour</label>
+        <input type="number" name="check_hour" min="1" max="24" value="9" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Inspected Qty</label>
+        <input type="number" name="inspected_quantity" min="0" value="0" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Passed Qty</label>
+        <input type="number" name="passed_quantity" min="0" value="0" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Defective Qty</label>
+        <input type="number" name="defective_quantity" min="0" value="0" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Remarks</label>
+        <input type="text" name="remarks" class="form-control">
+      </div>
+    </div>
+
+    <div class="card mt-4">
+      <div class="card-body">
+        <h5>Defects Found</h5>
+        <div class="row g-3 align-items-end defect-row">
+          <div class="col-md-4">
+            <label class="form-label">Defect</label>
+            <select name="defect_code" class="form-select">
+              <option value="">Select defect</option>
+              {% for defect in defects %}
+              <option value="{{ defect.defect_code }}">{{ defect.defect_code }} - {{ defect.defect_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Qty</label>
+            <input type="number" name="defect_quantity" min="0" value="0" class="form-control">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Remarks</label>
+            <input type="text" name="defect_remarks" class="form-control">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Defect Image</label>
+            <input type="file" name="defect_image_{{ defect.defect_code|default:'default' }}" class="form-control" accept="image/*">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <button type="submit" class="btn btn-primary">Save Quality Check</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

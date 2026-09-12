@@ -13,13 +13,14 @@ from django.core.management.base import BaseCommand
 from master_data.models import Article, Factory, ProductionLine
 from planning.models import LineAssignment, ProductionOrder
 from production.models import DailyProductionEntry
+from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail, InspectionDefect, QualityInspection
 
 
 class Command(BaseCommand):
     help = "Create/update the Admin and Production User groups with default permissions."
 
     def handle(self, *args, **options):
-        models = [Factory, Article, ProductionLine, ProductionOrder, LineAssignment, DailyProductionEntry]
+        models = [Factory, Article, ProductionLine, ProductionOrder, LineAssignment, DailyProductionEntry, DefectMaster, QualityInspection, HourlyLineCheck, HourlyLineCheckDetail, InspectionDefect]
         content_types = [ContentType.objects.get_for_model(model) for model in models]
         all_permissions = Permission.objects.filter(content_type__in=content_types)
         style_permissions = Permission.objects.filter(
@@ -34,12 +35,17 @@ class Command(BaseCommand):
             content_type=ContentType.objects.get_for_model(DailyProductionEntry),
             codename__in=["add_dailyproductionentry", "change_dailyproductionentry", "view_dailyproductionentry"],
         )
+        qa_permissions = Permission.objects.filter(
+            content_type__in=[ContentType.objects.get_for_model(model) for model in [DailyProductionEntry, QualityInspection, HourlyLineCheck, HourlyLineCheckDetail, InspectionDefect]],
+            codename__in=["add_dailyproductionentry", "change_dailyproductionentry", "view_dailyproductionentry", "add_qualityinspection", "change_qualityinspection", "view_qualityinspection", "add_hourlylinecheck", "change_hourlylinecheck", "view_hourlylinecheck", "add_hourlylinecheckdetail", "change_hourlylinecheckdetail", "view_hourlylinecheckdetail", "add_inspectiondefect", "change_inspectiondefect", "view_inspectiondefect"],
+        )
 
         groups = {
             "Superuser": all_permissions,
             "Factory Admin": all_permissions,
             "Supervisor": supervisor_permissions,
             "Dashboard Viewer": dashboard_permissions,
+            "QA Permission": qa_permissions,
         }
         for name, permissions in groups.items():
             group, _ = Group.objects.get_or_create(name=name)
@@ -48,4 +54,4 @@ class Command(BaseCommand):
         Group.objects.filter(name="Dashboard View").delete()
         Group.objects.filter(name__in=["Admin", "Production User"]).delete()
 
-        self.stdout.write(self.style.SUCCESS("Superuser, Factory Admin, Supervisor, and Dashboard Viewer groups are set up."))
+        self.stdout.write(self.style.SUCCESS("Superuser, Factory Admin, Supervisor, Dashboard Viewer, and QA Permission groups are set up."))

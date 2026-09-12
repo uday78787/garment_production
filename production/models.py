@@ -33,6 +33,11 @@ class DailyProductionEntry(TimeStampedModel):
         help_text="Actual minutes worked by each operator on this article.",
     )
     actual_output = models.PositiveIntegerField(validators=[MinValueValidator(0)])
+    defect_pieces = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Defective pieces found during final/end-of-line inspection for this output.",
+    )
 
     # Derived / stored fields, computed on save() via calculations.py
     produced_minutes = models.DecimalField(max_digits=12, decimal_places=2, editable=False)
@@ -83,6 +88,18 @@ class DailyProductionEntry(TimeStampedModel):
     def actual_efficiency_percent(self):
         """Actual efficiency formatted as a whole percentage for displays."""
         return self.actual_efficiency * 100
+
+    @property
+    def dhu(self):
+        """Defects per Hundred Units: defective pieces divided by inspected output."""
+        if self.actual_output <= 0:
+            return Decimal("0")
+        return (Decimal(self.defect_pieces) / Decimal(self.actual_output)) * Decimal("100")
+
+    @property
+    def defect_rate(self):
+        """Alias for end-of-line defect rate used in dashboard and quality reporting."""
+        return self.dhu
 
     def recompute_derived_fields(self):
         """

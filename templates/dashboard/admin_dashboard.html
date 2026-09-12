@@ -26,31 +26,31 @@
         <div class="card text-bg-primary shadow-sm">
             <div class="card-body">
                 <div class="fs-4">{{ kpi_total_output|floatformat:0 }}</div>
-                <div>Total Output (pcs)</div>
+                <div>Total Inspected Output (pcs)</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-bg-danger shadow-sm">
+            <div class="card-body">
+                <div class="fs-4">{{ kpi_total_defects|floatformat:0 }}</div>
+                <div>Defect Pieces Found</div>
             </div>
         </div>
     </div>
     <div class="col-md-3">
         <div class="card text-bg-success shadow-sm">
             <div class="card-body">
-                <div class="fs-4">{{ kpi_avg_efficiency }}%</div>
-                <div>Average Efficiency</div>
+                <div class="fs-4">{{ kpi_dhu|floatformat:2 }}%</div>
+                <div>DHU</div>
             </div>
         </div>
     </div>
     <div class="col-md-3">
         <div class="card text-bg-warning shadow-sm">
             <div class="card-body">
-                <div class="fs-4">{{ forecast_total|floatformat:0 }}</div>
-                <div>Forecast / Day</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-bg-info shadow-sm">
-            <div class="card-body">
-                <div class="fs-4">{% if forecast_days_to_complete is not None %}{{ forecast_days_to_complete }}{% else %}-{% endif %}</div>
-                <div>Forecast Days to Complete</div>
+                <div class="fs-4">{{ kpi_avg_efficiency }}%</div>
+                <div>Average Efficiency</div>
             </div>
         </div>
     </div>

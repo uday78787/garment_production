@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+{% block title %}New Quality Inspection{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <h3>Quality Inspection Entry</h3>
+  <form method="post">
+    {% csrf_token %}
+    <div class="row g-3">
+      <div class="col-md-3"><label class="form-label">Inspection Number</label><input type="text" name="inspection_number" class="form-control"></div>
+      <div class="col-md-3"><label class="form-label">Inspection Date</label><input type="date" name="inspection_date" class="form-control" required></div>
+      <div class="col-md-3">
+        <label class="form-label">Factory</label>
+        <select name="factory" class="form-select" required>
+          <option value="">Select factory</option>
+          {% for factory in factories %}
+          <option value="{{ factory.id }}">{{ factory.name }} ({{ factory.code }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Production Line</label>
+        <select name="production_line" class="form-select" required>
+          <option value="">Select line</option>
+          {% for line in production_lines %}
+          <option value="{{ line.id }}">{{ line.factory.name }} - {{ line.line_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Production Order</label>
+        <select name="production_order" class="form-select" required>
+          <option value="">Select order</option>
+          {% for order in production_orders %}
+          <option value="{{ order.id }}">{{ order.order_number }} - {{ order.article.article_code }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Article</label>
+        <select name="article" class="form-select" required>
+          <option value="">Select article</option>
+          {% for article in articles %}
+          <option value="{{ article.id }}">{{ article.article_code }} - {{ article.article_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3"><label class="form-label">Buyer</label><input type="text" name="buyer" class="form-control"></div>
+      <div class="col-md-3"><label class="form-label">Inspection Type</label>
+        <select name="inspection_type" class="form-select">
+          <option value="INLINE">INLINE</option>
+          <option value="END_LINE" selected>END_LINE</option>
+          <option value="FINAL">FINAL</option>
+        </select>
+      </div>
+      <div class="col-md-3"><label class="form-label">Inspected Qty</label><input type="number" name="inspected_quantity" class="form-control" min="0" value="0"></div>
+      <div class="col-md-3"><label class="form-label">Passed Qty</label><input type="number" name="passed_quantity" class="form-control" min="0" value="0"></div>
+      <div class="col-md-3"><label class="form-label">Rejected Qty</label><input type="number" name="rejected_quantity" class="form-control" min="0" value="0"></div>
+      <div class="col-md-3"><label class="form-label">Rework Qty</label><input type="number" name="rework_quantity" class="form-control" min="0" value="0"></div>
+    </div>
+
+    <div class="card mt-4">
+      <div class="card-body">
+        <h5>Defect Entry</h5>
+        <div class="row g-3 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label">Defect Code</label>
+            <select name="defect_code" class="form-select">
+              {% for defect in defects %}
+              <option value="{{ defect.defect_code }}">{{ defect.defect_code }} - {{ defect.defect_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Defect Quantity</label>
+            <input type="number" name="defect_quantity" class="form-control" min="0" value="0">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <label class="form-label">Remarks</label>
+      <textarea name="remarks" class="form-control" rows="3"></textarea>
+    </div>
+
+    <div class="mt-4">
+      <button type="submit" class="btn btn-primary">Save Inspection</button>
+      <a href="{% url 'quality:dashboard' %}" class="btn btn-outline-secondary">Back</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

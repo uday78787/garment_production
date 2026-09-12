@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}Inspection Saved{% endblock %}
+{% block content %}
+<div class="container py-5">
+  <div class="alert alert-success">
+    <h4 class="alert-heading">Inspection submitted successfully</h4>
+    <p>Inspection {{ inspection.inspection_number }} has been saved.</p>
+  </div>
+  <a href="{% url 'quality:dashboard' %}" class="btn btn-primary">Back to Quality Dashboard</a>
+</div>
+{% endblock %}

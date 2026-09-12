@@ -38,6 +38,13 @@ class DailyProductionEntryForm(forms.ModelForm):
         help_text="Use the actual minutes spent on this article (for example, 60 or 420).",
     )
 
+    defect_pieces = forms.IntegerField(
+        label="Defect pieces found",
+        min_value=0,
+        required=False,
+        help_text="Number of defective pieces identified during end-of-line inspection for this output.",
+    )
+
     class Meta:
         model = DailyProductionEntry
         fields = [
@@ -46,6 +53,7 @@ class DailyProductionEntryForm(forms.ModelForm):
             "actual_manpower",
             "working_minutes",
             "actual_output",
+            "defect_pieces",
             "planned_efficiency",
             "remarks",
         ]
@@ -54,6 +62,7 @@ class DailyProductionEntryForm(forms.ModelForm):
             "actual_manpower": forms.NumberInput(attrs={"class": "form-control", "min": 0}),
             "working_minutes": forms.NumberInput(attrs={"class": "form-control", "min": 0}),
             "actual_output": forms.NumberInput(attrs={"class": "form-control", "min": 0}),
+            "defect_pieces": forms.NumberInput(attrs={"class": "form-control", "min": 0}),
             "planned_efficiency": forms.NumberInput(attrs={"class": "form-control", "min": 0, "max": 100}),
             "remarks": forms.Textarea(attrs={"class": "form-control", "rows": 2}),
         }
@@ -139,6 +148,15 @@ class DailyProductionEntryForm(forms.ModelForm):
                 "Working minutes cannot exceed the assignment's configured "
                 f"daily minutes ({assignment.working_minutes_per_operator})."
             )
+        return value
+
+    def clean_defect_pieces(self):
+        value = self.cleaned_data.get("defect_pieces")
+        if value is None:
+            return 0
+        actual_output = self.cleaned_data.get("actual_output")
+        if actual_output is not None and value > actual_output:
+            raise forms.ValidationError("Defective pieces cannot exceed checked output pieces.")
         return value
 
     def clean_actual_output(self):
