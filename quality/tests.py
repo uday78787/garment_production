@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from accounts.models import UserProfile
-from master_data.models import Article, Factory, ProductionLine
+from master_data.models import Article, Factory, FactoryShift, ProductionLine
 from planning.models import ProductionOrder
 from quality.calculations import calculate_defect_rate, calculate_dhu, calculate_fpy
 from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail, InspectionDefect, QualityInspection
@@ -142,3 +142,85 @@ class QAPermissionTest(TestCase):
         self.assertIn("QA Permission", [group.name for group in user.groups.all()])
         self.assertTrue(user.profile.assigned_lines.exists())
         self.assertIn("defect_image", [field.name for field in HourlyLineCheckDetail._meta.get_fields()])
+
+    def test_qa_permission_redirects_to_qa_dashboard(self):
+        user = get_user_model().objects.create_user(username="qa_redirect", password="pass1234")
+        user.profile.role = UserProfile.Role.QA_PERMISSION
+        user.profile.save()
+
+        response = self.client.post(
+            reverse("accounts:login"),
+            {"username": "qa_redirect", "password": "pass1234"},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("dashboard:qa_dashboard"), fetch_redirect_response=False)
+
+    def test_qa_dashboard_renders_for_qa_user(self):
+        factory = Factory.objects.create(name="Factory QA", code="FQA")
+        line = ProductionLine.objects.create(
+            factory=factory,
+            line_name="QA Line 01",
+            capacity_manpower=30,
+            default_working_minutes=480,
+        )
+        user = get_user_model().objects.create_user(username="qa_render", password="pass1234")
+        user.profile.role = UserProfile.Role.QA_PERMISSION
+        user.profile.factory = factory
+        user.profile.save()
+        user.profile.assigned_lines.add(line)
+
+        self.client.login(username="qa_render", password="pass1234")
+        response = self.client.get(reverse("dashboard:qa_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Current Shift")
+        self.assertContains(response, "Current Hour")
+        self.assertNotContains(response, "New Check")
+        self.assertNotContains(response, '<label class="form-label">Hour</label>')
+
+    def test_factory_shift_supports_custom_hours_and_overtime(self):
+        factory = Factory.objects.create(name="Shift Factory", code="SF1")
+        shift = FactoryShift.objects.create(
+            factory=factory,
+            shift_name="Main Shift",
+            start_time="08:00:00",
+            end_time="20:00:00",
+            standard_hours=8,
+            overtime_hours=2,
+            overtime_start_time="16:00:00",
+            active=True,
+        )
+
+        self.assertEqual(shift.standard_hours, 8)
+        self.assertEqual(shift.overtime_hours, 2)
+        self.assertEqual(shift.total_shift_hours, 10)
+        self.assertEqual(shift.shift_end_time().strftime("%H:%M"), "18:00")
+
+    def test_superuser_can_manage_factory_shift_schedule_from_dashboard(self):
+        factory = Factory.objects.create(name="Factory Admin UI", code="FAUI")
+        superuser = get_user_model().objects.create_superuser(username="superui", password="pass1234")
+
+        self.client.force_login(superuser)
+        response = self.client.get(reverse("dashboard:shift_management"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Factory Shift Management")
+
+        create_response = self.client.post(
+            reverse("dashboard:shift_management"),
+            {
+                "factory": str(factory.pk),
+                "shift_name": "Day Shift",
+                "start_time": "08:00",
+                "end_time": "16:00",
+                "standard_hours": "8",
+                "overtime_hours": "0",
+                "overtime_start_time": "",
+                "description": "Factory day schedule",
+                "active": "on",
+            },
+        )
+
+        self.assertEqual(create_response.status_code, 302)
+        self.assertTrue(FactoryShift.objects.filter(factory=factory, shift_name="Day Shift").exists())

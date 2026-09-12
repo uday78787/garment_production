@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from common.admin import FactoryScopedAdminMixin
-from .models import Article, Factory, ProductionLine
+from .models import Article, Factory, FactoryShift, ProductionLine, ProductionLineShiftAssignment
 
 
 @admin.register(Factory)
@@ -21,6 +21,47 @@ class FactoryAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
         super().save_model(request, obj, form, change)
         if not change:
             self.message_user(request, f"Factory Admin account will use a username starting with '{obj.code.lower()}-Admin'. Set its password from Users.")
+
+
+@admin.register(FactoryShift)
+class FactoryShiftAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
+    list_display = (
+        "factory",
+        "shift_name",
+        "preset_code",
+        "start_time",
+        "end_time",
+        "standard_hours",
+        "overtime_hours",
+        "overtime_start_time",
+        "active",
+        "assigned_by",
+    )
+    list_filter = ("factory", "active", "preset_code")
+    search_fields = ("shift_name", "factory__name", "preset_code")
+    actions = ["create_default_factory_shifts"]
+    fieldsets = (
+        ("Basic Shift", {
+            "fields": ("factory", "shift_name", "preset_code", "start_time", "end_time", "active")
+        }),
+        ("Shift Duration", {
+            "fields": ("standard_hours", "overtime_hours", "overtime_start_time"),
+            "description": "Set the normal shift length from 1 to 8 hours, and optional overtime beyond the main shift.",
+        }),
+        ("Details", {"fields": ("description", "assigned_by")}),
+    )
+
+    @admin.action(description="Create Day / Over Time / Night presets for selected factories")
+    def create_default_factory_shifts(self, request, queryset):
+        for factory in queryset:
+            FactoryShift.default_factory_presets(factory, assigned_by=request.user)
+
+
+@admin.register(ProductionLineShiftAssignment)
+class ProductionLineShiftAssignmentAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
+    list_display = ("assignment_date", "factory", "production_line", "shift", "active", "assigned_by")
+    list_filter = ("factory", "assignment_date", "active")
+    search_fields = ("production_line__line_name", "shift__shift_name")
 
 
 @admin.register(ProductionLine)

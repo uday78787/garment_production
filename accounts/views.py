@@ -38,8 +38,11 @@ class RoleBasedLoginView(auth_views.LoginView):
     def get_success_url(self):
         user = self.request.user
         messages.success(self.request, f"Welcome back, {user.get_username()}!")
-        if hasattr(user, "profile") and user.profile.is_admin:
-            return reverse_lazy("dashboard:admin_dashboard")
+        if hasattr(user, "profile"):
+            if user.profile.is_admin:
+                return reverse_lazy("dashboard:admin_dashboard")
+            if user.profile.role == "QA_PERMISSION":
+                return reverse_lazy("dashboard:qa_dashboard")
         return reverse_lazy("dashboard:user_dashboard")
 
 

@@ -14,73 +14,121 @@
 <body class="bg-light">
 
 {% if user.is_authenticated %}
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="{% url 'dashboard:user_dashboard' %}">
-            <img src="{% static 'images/brand.png' %}" alt="ProdVanta" height="32" class="d-inline-block align-text-top me-2">
-            ProdVanta
-        </a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="navMenu">
-            <ul class="navbar-nav me-auto">
-                {% if user.is_superuser or user.profile.is_admin %}
-                <li class="nav-item"><a class="nav-link" href="{% url 'dashboard:admin_dashboard' %}"><i class="fa-solid fa-gauge"></i> Admin Dashboard</a></li>
-                {% else %}
-                <li class="nav-item"><a class="nav-link" href="{% url 'dashboard:user_dashboard' %}"><i class="fa-solid fa-gauge"></i> Dashboard</a></li>
-                {% endif %}
-                {% if user.is_superuser or user.profile.is_admin or user.profile.accessible_factories.exists %}
-                <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                        <i class="fa-solid fa-building"></i> Factory
-                    </a>
-                    <ul class="dropdown-menu">
-                        {% if user.is_superuser %}
-                        <li><h6 class="dropdown-header">Factory Management</h6></li>
-                        <li><a class="dropdown-item" href="{% url 'admin:master_data_factory_changelist' %}"><i class="fa-solid fa-building-circle-check"></i> Factory Setup</a></li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li><h6 class="dropdown-header">Users</h6></li>
-                        <li><a class="dropdown-item" href="{% url 'admin:auth_user_changelist' %}"><i class="fa-solid fa-users"></i> Factory Users</a></li>
-                        <li><a class="dropdown-item" href="{% url 'admin:accounts_userprofile_changelist' %}"><i class="fa-solid fa-user-shield"></i> User Roles &amp; Locations</a></li>
-                        {% endif %}
-                    </ul>
-                </li>
-                {% endif %}
-                {% if user.is_superuser %}
-                <li class="nav-item">
-                    <a class="nav-link" href="{% url 'dashboard:factory_selector' %}"><i class="fa-solid fa-filter"></i> Factory Filter</a>
-                </li>
-                {% endif %}
-                <li class="nav-item"><a class="nav-link" href="{% url 'production:entry_list' %}"><i class="fa-solid fa-list-check"></i> Production Entries</a></li>
-                <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                        <i class="fa-solid fa-shield-check"></i> Quality
-                    </a>
-                    <ul class="dropdown-menu">
-                        <li><a class="dropdown-item" href="{% url 'quality:dashboard' %}"><i class="fa-solid fa-gauge-high"></i> Quality Dashboard</a></li>
-                        <li><a class="dropdown-item" href="{% url 'quality:inspection_list' %}"><i class="fa-solid fa-clipboard-list"></i> Inspections</a></li>
-                        <li><a class="dropdown-item" href="{% url 'quality:inspection_create' %}"><i class="fa-solid fa-plus"></i> New Inspection</a></li>
-                        <li><a class="dropdown-item" href="{% url 'quality:defect_master_list' %}"><i class="fa-solid fa-bug"></i> Defect Master</a></li>
-                        <li><a class="dropdown-item" href="{% url 'quality:hourly_check_list' %}"><i class="fa-solid fa-clock"></i> Hourly Line Checks</a></li>
-                        <li><a class="dropdown-item" href="{% url 'quality:article_defect_bulletin' %}"><i class="fa-solid fa-file-export"></i> Defect Bulletin</a></li>
-                        <li><a class="dropdown-item" href="{% url 'quality:quality_hold_list' %}"><i class="fa-solid fa-ban"></i> Quality Holds</a></li>
-                    </ul>
-                </li>
-                <li class="nav-item"><a class="nav-link" href="{% url 'reports:production_report' %}"><i class="fa-solid fa-file-lines"></i> Reports</a></li>
-            </ul>
-            <ul class="navbar-nav">
-                <li class="nav-item"><span class="nav-link">{{ user.get_username }}</span></li>
-                <li class="nav-item">
-                    <form method="post" action="{% url 'accounts:logout' %}" class="d-inline">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-link nav-link"><i class="fa-solid fa-right-from-bracket"></i> Logout</button>
-                    </form>
-                </li>
-            </ul>
+    {% if user.profile.role == 'QA_PERMISSION' %}
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand d-flex align-items-center gap-2" href="{% url 'dashboard:qa_dashboard' %}">
+                <img src="{% static 'images/brand.png' %}" alt="ProdVanta" height="32" class="d-inline-block align-text-top">
+                <span class="fw-bold">PRODVANTA</span>
+            </a>
+
+            <div class="d-flex align-items-center gap-3 text-white flex-wrap ms-auto">
+                <span class="fw-bold text-uppercase">{{ user.profile.factory.name|default:'Factory' }}</span>
+                <span class="text-white-50">|</span>
+                <span class="fw-semibold">Line No.: 
+                    {% for line in user.profile.assigned_lines.all %}
+                        {{ line.line_name }}{% if not forloop.last %}, {% endif %}
+                    {% empty %}
+                        N/A
+                    {% endfor %}
+                </span>
+                <span class="text-white-50">|</span>
+                <span class="fw-semibold" id="qa-live-time">Live Time (IST)</span>
+            </div>
         </div>
-    </div>
-</nav>
+    </nav>
+    <script>
+        function updateQaLiveTime() {
+            const timeEl = document.getElementById('qa-live-time');
+            if (!timeEl) return;
+            const now = new Date();
+            const formatter = new Intl.DateTimeFormat('en-IN', {
+                timeZone: 'Asia/Kolkata',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true,
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+            });
+            timeEl.textContent = 'IST: ' + formatter.format(now);
+        }
+        updateQaLiveTime();
+        setInterval(updateQaLiveTime, 1000);
+    </script>
+    {% else %}
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{% url 'dashboard:user_dashboard' %}">
+                <img src="{% static 'images/brand.png' %}" alt="ProdVanta" height="32" class="d-inline-block align-text-top me-2">
+                ProdVanta
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navMenu">
+                <ul class="navbar-nav me-auto">
+                    {% if user.is_superuser or user.profile.is_admin %}
+                    <li class="nav-item"><a class="nav-link" href="{% url 'dashboard:admin_dashboard' %}"><i class="fa-solid fa-gauge"></i> Admin Dashboard</a></li>
+                    {% else %}
+                    <li class="nav-item"><a class="nav-link" href="{% url 'dashboard:user_dashboard' %}"><i class="fa-solid fa-gauge"></i> Dashboard</a></li>
+                    {% endif %}
+                    {% if user.is_superuser or user.profile.is_admin or user.profile.accessible_factories.exists %}
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="fa-solid fa-building"></i> Factory
+                        </a>
+                        <ul class="dropdown-menu">
+                            {% if user.is_superuser %}
+                            <li><h6 class="dropdown-header">Factory Management</h6></li>
+                            <li><a class="dropdown-item" href="{% url 'admin:master_data_factory_changelist' %}"><i class="fa-solid fa-building-circle-check"></i> Factory Setup</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><h6 class="dropdown-header">Users</h6></li>
+                            <li><a class="dropdown-item" href="{% url 'admin:auth_user_changelist' %}"><i class="fa-solid fa-users"></i> Factory Users</a></li>
+                            <li><a class="dropdown-item" href="{% url 'admin:accounts_userprofile_changelist' %}"><i class="fa-solid fa-user-shield"></i> User Roles &amp; Locations</a></li>
+                            {% endif %}
+                        </ul>
+                    </li>
+                    {% endif %}
+                    {% if user.is_superuser %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'dashboard:factory_selector' %}"><i class="fa-solid fa-filter"></i> Factory Filter</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'dashboard:shift_management' %}"><i class="fa-solid fa-clock"></i> Shift Management</a>
+                    </li>
+                    {% endif %}
+                    <li class="nav-item"><a class="nav-link" href="{% url 'production:entry_list' %}"><i class="fa-solid fa-list-check"></i> Production Entries</a></li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="fa-solid fa-shield-check"></i> Quality
+                        </a>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="{% url 'quality:dashboard' %}"><i class="fa-solid fa-gauge-high"></i> Quality Dashboard</a></li>
+                            <li><a class="dropdown-item" href="{% url 'quality:inspection_list' %}"><i class="fa-solid fa-clipboard-list"></i> Inspections</a></li>
+                            <li><a class="dropdown-item" href="{% url 'quality:inspection_create' %}"><i class="fa-solid fa-plus"></i> New Inspection</a></li>
+                            <li><a class="dropdown-item" href="{% url 'quality:defect_master_list' %}"><i class="fa-solid fa-bug"></i> Defect Master</a></li>
+                            <li><a class="dropdown-item" href="{% url 'quality:hourly_check_list' %}"><i class="fa-solid fa-clock"></i> Hourly Line Checks</a></li>
+                            <li><a class="dropdown-item" href="{% url 'quality:article_defect_bulletin' %}"><i class="fa-solid fa-file-export"></i> Defect Bulletin</a></li>
+                            <li><a class="dropdown-item" href="{% url 'quality:quality_hold_list' %}"><i class="fa-solid fa-ban"></i> Quality Holds</a></li>
+                        </ul>
+                    </li>
+                    <li class="nav-item"><a class="nav-link" href="{% url 'reports:production_report' %}"><i class="fa-solid fa-file-lines"></i> Reports</a></li>
+                </ul>
+                <ul class="navbar-nav">
+                    <li class="nav-item"><span class="nav-link">{{ user.get_username }}</span></li>
+                    <li class="nav-item">
+                        <form method="post" action="{% url 'accounts:logout' %}" class="d-inline">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-link nav-link"><i class="fa-solid fa-right-from-bracket"></i> Logout</button>
+                        </form>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+    {% endif %}
 {% endif %}
 
 <div class="container-fluid mt-3">

@@ -20,11 +20,12 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.conf import settings
 from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Sum
 from django.http import HttpResponse
+from django.shortcuts import redirect
 from django.utils import timezone
 from django.views.generic import TemplateView
 
 from accounts.mixins import AdminRequiredMixin, admin_required
-from master_data.models import Article, Factory
+from master_data.models import Article, Factory, FactoryShift, ProductionLineShiftAssignment
 from planning.models import LineAssignment
 from planning.services.calculations import forecast_daily_output
 from production.models import DailyProductionEntry
@@ -359,6 +360,12 @@ class AdminDashboardView(AdminRequiredMixin, BaseDashboardView):
 class UserDashboardView(BaseDashboardView):
     template_name = "dashboard/user_dashboard.html"
 
+    def dispatch(self, request, *args, **kwargs):
+        profile = getattr(request.user, "profile", None)
+        if profile and profile.role == "QA_PERMISSION":
+            return redirect("dashboard:qa_dashboard")
+        return super().dispatch(request, *args, **kwargs)
+
     def get_scoped_entries(self):
         user = self.request.user
         if hasattr(user, "profile") and not user.profile.is_admin:
@@ -369,6 +376,33 @@ class UserDashboardView(BaseDashboardView):
                 entries = entries.filter(assignment__production_line__factory_id=user.profile.factory_id)
             return entries
         return DailyProductionEntry.objects.all()
+
+
+class QADashboardView(LoginRequiredMixin, TemplateView):
+    template_name = "dashboard/qa_dashboard.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_superuser:
+            return redirect("dashboard:admin_dashboard")
+        profile = getattr(request.user, "profile", None)
+        if profile is None or profile.role != "QA_PERMISSION":
+            return redirect("dashboard:user_dashboard")
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        profile = getattr(user, "profile", None)
+        lines = profile.assigned_lines.select_related("factory").order_by("factory__name", "line_name") if profile else []
+        context["assigned_lines"] = lines
+        context["factory_name"] = profile.factory.name if profile and profile.factory else "Line Access"
+        context["qa_user"] = user.get_full_name() or user.get_username()
+
+        factory = profile.factory if profile else None
+        current_shift = FactoryShift.get_active_shift_for_factory(factory) if factory else None
+        context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
+        context["current_hour_label"] = current_shift.current_hour_label() if current_shift else "Not assigned"
+        return context
 
 
 class FactorySelectorView(LoginRequiredMixin, TemplateView):
@@ -406,3 +440,88 @@ class FactorySelectorView(LoginRequiredMixin, TemplateView):
         from django.shortcuts import redirect
 
         return redirect("dashboard:admin_dashboard")
+
+
+class ShiftManagementView(LoginRequiredMixin, TemplateView):
+    template_name = "dashboard/shift_management.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_superuser:
+            return redirect("dashboard:user_dashboard")
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        factories = Factory.objects.filter(active_status=True).order_by("name")
+        context["factories"] = factories
+        selected_factory_id = self.request.GET.get("factory") or self.request.session.get("selected_factory_id")
+        if selected_factory_id and factories.filter(pk=selected_factory_id).exists():
+            factory = factories.get(pk=selected_factory_id)
+        else:
+            factory = factories.first()
+        context["selected_factory"] = factory
+        context["selected_factory_id"] = factory.pk if factory else None
+        context["factory_shifts"] = (
+            FactoryShift.objects.filter(factory=factory).order_by("start_time") if factory else FactoryShift.objects.none()
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        factory_id = request.POST.get("factory")
+        factory = Factory.objects.filter(pk=factory_id, active_status=True).first()
+        if factory is None:
+            from django.contrib import messages
+
+            messages.error(request, "Select a valid active factory.")
+            return redirect("dashboard:shift_management")
+
+        shift_name = (request.POST.get("shift_name") or "").strip()
+        start_time = request.POST.get("start_time")
+        end_time = request.POST.get("end_time")
+        if not shift_name or not start_time or not end_time:
+            from django.contrib import messages
+
+            messages.error(request, "Shift name, start time, and end time are required.")
+            return redirect("dashboard:shift_management")
+
+        breaks_payload = request.POST.get("break_blocks") or "[]"
+        try:
+            breaks_value = json.loads(breaks_payload) if breaks_payload else []
+        except json.JSONDecodeError:
+            breaks_value = []
+
+        if isinstance(breaks_value, list):
+            break_items = []
+            for block in breaks_value:
+                if not isinstance(block, dict):
+                    continue
+                start = (block.get("start") or "").strip()
+                end = (block.get("end") or "").strip()
+                label = (block.get("label") or "Break").strip() or "Break"
+                if start and end:
+                    break_items.append({"label": label, "start": start, "end": end})
+        else:
+            break_items = []
+
+        description = request.POST.get("description") or ""
+        if break_items:
+            description = json.dumps({"breaks": break_items}, ensure_ascii=True)
+
+        FactoryShift.objects.create(
+            factory=factory,
+            shift_name=shift_name,
+            start_time=start_time,
+            end_time=end_time,
+            standard_hours=int(request.POST.get("standard_hours") or 8),
+            overtime_hours=int(request.POST.get("overtime_hours") or 0),
+            overtime_start_time=request.POST.get("overtime_start_time") or None,
+            description=description,
+            active=request.POST.get("active") == "on",
+            assigned_by=request.user,
+        )
+
+        request.session["selected_factory_id"] = factory.pk
+        from django.contrib import messages
+
+        messages.success(request, f"Shift '{shift_name}' saved for {factory.name}. Break schedule updated.")
+        return redirect("dashboard:shift_management")
