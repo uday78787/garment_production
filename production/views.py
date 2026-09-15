@@ -105,12 +105,12 @@ class DailyProductionEntryListView(ScopedQuerysetMixin, ListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         selected_factory_id = self.request.session.get("selected_factory_id")
-        if selected_factory_id:
-            context["articles"] = Article.objects.filter(
-                orders__assignments__production_line__factory_id=selected_factory_id
-            ).distinct().order_by("article_code")
-        else:
-            context["articles"] = Article.objects.order_by("article_code")
+        visible_assignments = LineAssignment.objects.filter(
+            pk__in=self.get_base_queryset().values("assignment_id")
+        )
+        context["articles"] = Article.objects.filter(
+            orders__assignments__in=visible_assignments
+        ).distinct().order_by("article_code")
         line_ids = self.get_base_queryset().values_list(
             "assignment__production_line_id", flat=True
         ).distinct()
@@ -169,10 +169,10 @@ class DailyProductionEntryCreateView(ScopedQuerysetMixin, CreateView):
             if form.is_bound:
                 assignment_id = form.data.get("assignment")
                 if assignment_id:
-                    try:
-                        assignment = LineAssignment.objects.get(pk=assignment_id)
-                    except LineAssignment.DoesNotExist:
-                        assignment = None
+                    assignment = LineAssignment.objects.filter(
+                        pk=assignment_id,
+                        pk__in=self.get_base_queryset().values("assignment_id"),
+                    ).select_related("production_order").first()
 
         if assignment is not None:
             order = assignment.production_order
@@ -236,10 +236,10 @@ class DailyProductionEntryUpdateView(ScopedQuerysetMixin, UpdateView):
             if form.is_bound:
                 assignment_id = form.data.get("assignment")
                 if assignment_id:
-                    try:
-                        assignment = LineAssignment.objects.get(pk=assignment_id)
-                    except LineAssignment.DoesNotExist:
-                        assignment = None
+                    assignment = LineAssignment.objects.filter(
+                        pk=assignment_id,
+                        pk__in=self.get_base_queryset().values("assignment_id"),
+                    ).select_related("production_order").first()
             if assignment is None and getattr(form.instance, "assignment", None):
                 assignment = form.instance.assignment
 

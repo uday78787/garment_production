@@ -103,6 +103,8 @@ class HourlyLineCheckDetail(TimeStampedModel):
     hourly_check = models.ForeignKey(HourlyLineCheck, on_delete=models.CASCADE, related_name="details")
     defect = models.ForeignKey(DefectMaster, on_delete=models.PROTECT, related_name="hourly_check_details")
     defect_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    repaired_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    resolved = models.BooleanField(default=False)
     defect_image = models.ImageField(upload_to="quality/defects/%Y/%m/%d/", blank=True, null=True, help_text="Upload a defect image captured by QA at the line.")
     remarks = models.TextField(blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="hourly_check_details_created")

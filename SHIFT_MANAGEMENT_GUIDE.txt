@@ -1,0 +1,311 @@
+GARMENT PRODUCTION SYSTEM
+END-TO-END PROCESS GUIDE
+========================
+
+Purpose
+-------
+This guide covers the full operational flow of the garment production system,
+from superuser setup to production data entry and final QA/checker validation.
+It explains who does what, which pages they use, and how information flows from
+one role to the next.
+
+1. Roles in the system
+----------------------
+The system is designed around the following user roles:
+
+1. Superuser
+   - Full system access.
+   - Can manage factories, shifts, user profiles, and production setup.
+   - Can open the Shift Management page and control master data.
+   - Has first responsibility for enabling the factory and assigning access.
+
+2. Factory Admin
+   - Controls factory-level setup within the assigned factory.
+   - Manages factory-specific rules, users, and production line access.
+   - Can support supervisors and QA users in the same factory.
+
+3. Supervisor / Production User
+   - Works on assigned production lines and production orders.
+   - Enters daily production records and monitors output/efficiency.
+   - Sees only the production data scoped to their assigned lines.
+
+4. QA Permission / Checker
+   - Works as the quality checker at line/hour level.
+   - Performs hourly checking, defect recording, and defect repair tracking.
+   - Usually has access only to assigned lines in the relevant factory.
+
+5. Dashboard Viewer / general user
+   - Can view dashboards according to assigned scope.
+   - Restricted from manipulating factory-level setup or shift schedule.
+
+2. System startup and login
+---------------------------
+1. Open the project.
+   - Activate the environment:
+     venv\Scripts\Activate.ps1
+   - Start the app:
+     python manage.py runserver
+
+2. Open the login page:
+   http://127.0.0.1:8000/accounts/login/
+
+3. Log in with the correct role-based user account.
+   - Superuser logs into the admin/dashboard flow.
+   - QA Permission user is redirected to the QA dashboard.
+   - Standard production users are redirected to their user dashboard.
+
+3. Superuser responsibilities
+----------------------------
+The superuser is the foundation for all operations.
+
+3.1 Prepare the factory and master data
+1. Go to Django admin:
+   http://127.0.0.1:8000/admin/
+2. Confirm the main factory/location exists.
+3. Confirm production lines exist for that factory.
+4. Confirm articles/styles and production orders are created.
+5. Verify each user profile is correctly assigned to a factory and role.
+
+3.2 Create and assign users
+1. Open User Profiles from the admin.
+2. Set the user role to one of:
+   - Superuser
+   - Factory Admin
+   - Supervisor
+   - Dashboard Viewer
+   - QA Permission
+3. Assign the correct factory.
+4. Assign relevant production lines to the user if they need line-based access.
+5. Save the user profile.
+
+Important:
+- Superusers can access all factories.
+- Non-superusers should be restricted to their own assigned factory/lines.
+- QA users must be assigned to the correct factory and relevant production lines.
+
+3.3 Configure factory shift and schedule
+1. Open the Shift Management page from the admin dashboard.
+   Direct URL:
+   http://127.0.0.1:8000/dashboard/admin/shift-management/
+2. Select the target factory.
+3. Set the shift name, start time, end time, total shift hours, overtime, and
+   active status.
+4. Configure Hour 1 through Hour 8 as needed.
+5. Add break timings where required.
+6. Save the shift.
+7. Confirm that the active shift matches the current production timing.
+
+The superuser controls the factory-wide shift setup. Production users and QA
+users cannot modify the factory shift definition.
+
+4. Factory admin and supervisor work
+------------------------------------
+Once the superuser sets the foundation, the factory admin and supervisors make
+sure daily production is prepared and monitored.
+
+4.1 Factory admin actions
+- Approve and maintain factory configuration.
+- Confirm the correct factory and assigned lines are active.
+- Support role assignments.
+- Validate line access for supervisors and QA users.
+
+4.2 Supervisor actions
+- Review production orders and line assignments.
+- Ensure every line has the right planned work and manpower.
+- Check daily production entry against order quantities.
+- Monitor actual output, efficiency, and variance.
+
+5. Production flow: operator and production user
+--------------------------------------------------
+This is the daily data-entry process for the line operator or production user.
+
+5.1 Access the production dashboard
+1. Log in using a production user account.
+2. The system redirects to the regular dashboard.
+3. If the user is a QA Permission user, they are redirected to the QA dashboard.
+
+5.2 Select the assigned line and factory
+- The production user should only see lines assigned to their profile.
+- The system filters production entries by assigned lines.
+- For a restricted user, only their active and assigned factory/lines appear.
+
+5.3 Enter a daily production entry
+1. Open the production entry form.
+2. Select the assignment, date, manpower, working minutes, and actual output.
+3. Enter defective pieces if applicable.
+4. Save the record.
+5. The system recalculates:
+   - produced minutes
+   - available minutes
+   - actual efficiency
+   - planned efficiency
+   - target output
+   - gain/loss minutes
+
+5.4 Rules to follow while entering production
+- Actual manpower cannot exceed the line capacity.
+- Production date cannot be before assignment start date.
+- Actual output cannot exceed the remaining order quantity.
+- Working minutes cannot exceed the configured line assignment limit.
+- A production record is usually created once per assignment per date.
+
+5.5 Production output responsibility
+The entry-level production user is responsible for entering accurate daily line
+performance and reporting real line output, manpower, and defect count.
+This data becomes the source for monitoring and reports.
+
+6. QA / checker workflow
+------------------------
+The QA Permission user or checker is responsible for hourly line validation and
+quality inspection.
+
+6.1 Open the QA dashboard
+1. Log in as a QA Permission user.
+2. The app redirects to:
+   http://127.0.0.1:8000/dashboard/qa/
+3. The dashboard shows:
+   - current shift
+   - current hour window
+   - assigned lines
+   - current-hour quality summary
+   - daily quality totals
+
+6.2 Check the active shift and hour
+- The QA dashboard uses the active factory shift and current time.
+- It calculates the current hour and break status from schedule data.
+- The checker should confirm the correct shift and current hour before entering
+  inspection data.
+
+6.3 Create an hourly end-of-line quality check
+1. Open the hourly check entry form.
+2. Select the assigned factory and production line.
+3. Select the production order and article.
+4. Enter inspected quantity and passed quantity.
+5. Add defect rows with:
+   - defect code
+   - defect quantity
+   - repaired quantity
+   - resolved status
+   - defect image if required
+6. Save the check.
+
+6.4 Quality validation rules
+- Passed quantity + defective quantity cannot exceed inspected quantity.
+- Repaired quantity cannot exceed defective quantity.
+- Each defect entry must match a valid defect definition.
+- QA must use the proper assigned lines; otherwise the system restricts access.
+
+6.5 QA/Checker responsibility
+The checker is the final quality gate for the line output. Their responsibilities:
+- inspect produced pieces hourly
+- record defects and defect quantity
+- mark repair or resolution status
+- confirm pass/fail quantity
+- maintain quality traceability for later reporting
+
+7. Defect management and quality reporting
+------------------------------------------
+Defect definitions are controlled at the quality setup level.
+
+7.1 Defect master setup
+- Superuser or Factory Admin may add defect definitions.
+- Defect codes, defect names, categories, severity, and department are recorded.
+- These master defect records feed quality inspection and hourly checks.
+
+7.2 Types of quality records
+- Daily production entry records output and basic defect quantity.
+- Hourly line checks record time-based quality inspection.
+- Quality inspection records full inspection flows and defect analysis.
+- Defect detail records capture exact defect types and repairs.
+
+7.3 Reporting
+Reports and dashboards pull values from both production and quality data, such as:
+- total inspected quantity
+- total passed quantity
+- total rejected quantity
+- defect rate
+- DPH/DHU trend
+- FPY and defect summaries
+
+8. Full end-to-end workflow summary
+------------------------------------
+Below is the complete process flow from top to bottom:
+
+1. Superuser creates the factory and master setup.
+2. Superuser creates or updates shifts and active schedules.
+3. Superuser configures users and assigns roles to factory/line access.
+4. Factory Admin and Supervisor confirm production orders and line assignments.
+5. Production user enters daily production records for assigned lines.
+6. QA checker reviews the current shift and current hour.
+7. QA checker enters hourly line quality inspection data.
+8. Defects are recorded and repaired where needed.
+9. Quality and production dashboards update with live summaries.
+10. Management reviews output, efficiency, and defect trends.
+
+9. Access and restriction rules
+--------------------------------
+- Superuser can access shift management and factory-level master setup.
+- QA Permission users cannot modify shift management settings.
+- Production users see only their assigned line data.
+- QA users see only the assigned QA scope for their factory/lines.
+- Factory Admins manage factory-local operations, but do not replace the superuser
+  role for system-wide setup.
+
+10. Daily operating routine
+---------------------------
+For a normal working day:
+
+Morning start
+- Ensure the factory is active.
+- Confirm the active shift is correct.
+- Confirm user assignments and line access.
+
+During production
+- Production user enters production output throughout the day.
+- QA checker inspects hourly output and records defects.
+- Supervisor monitors order progress and quality trend.
+
+End of shift
+- Review line output and quality results.
+- Confirm defect closure and repair data.
+- Compare actual performance against plan.
+
+11. Troubleshooting
+-------------------
+If a user cannot perform the expected action:
+
+User cannot see Shift Management
+- Confirm the account is a superuser.
+- Log out and log in again after changing permissions.
+
+Wrong factory appears
+- Select the correct factory in the dashboard or shift configuration.
+- Ensure the user profile is assigned to the correct factory.
+
+Dashboard shows the wrong shift/hour
+- Check the active shift.
+- Confirm the current time falls within the configured shift window.
+- Check that the shift is marked active.
+
+QA user cannot access assigned lines
+- Confirm the user role is QA Permission.
+- Ensure assigned lines are linked to the user profile.
+- Check factory assignment and line matching.
+
+Production user cannot enter data
+- Confirm the user is assigned to the correct line.
+- Check if the order and assignment exist.
+- Validate data values against the system rules.
+
+12. Recommended process ownership
+---------------------------------
+This is the recommended ownership flow:
+
+- Superuser: system setup, factory preparation, shifts, master setup, access.
+- Factory Admin: factory operations and user support.
+- Supervisor: order and line oversight.
+- Production User: daily output entry.
+- QA Permission / Checker: hourly inspection, defect checking, and quality closure.
+
+This is the complete process flow for the garment production system, from the
+superuser down to the entry-level operator/checker.

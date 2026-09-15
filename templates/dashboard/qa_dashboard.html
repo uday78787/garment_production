@@ -32,88 +32,48 @@
       <div class="card border-0 shadow-sm bg-info text-white h-100">
         <div class="card-body">
           <div class="text-uppercase small opacity-75">Current Hour</div>
-          <div class="display-6 mt-2">{{ current_hour_label|default:'--:--' }}</div>
+          <div class="display-6 mt-2">{{ current_hour_number|default:'Not assigned' }}</div>
+          <div class="small">{{ current_hour_label|default:'--:--' }}</div>
+          {% if current_hour_on_break %}<div class="badge text-bg-warning text-dark mt-2">BREAK ACTIVE</div>{% endif %}
+          {% if current_break_label %}<div class="small mt-1">{{ current_break_label }}</div>{% endif %}
         </div>
       </div>
     </div>
     <div class="col-md-3">
       <div class="card border-0 shadow-sm bg-success text-white h-100">
         <div class="card-body">
-          <div class="text-uppercase small opacity-75">Today Passed</div>
-          <div class="display-6 mt-2">0</div>
+          <div class="text-uppercase small opacity-75">Current Hour Passed</div>
+          <div class="display-6 mt-2">{{ qa_current_hour_passed }}</div>
         </div>
       </div>
     </div>
     <div class="col-md-3">
       <div class="card border-0 shadow-sm bg-warning text-dark h-100">
         <div class="card-body">
-          <div class="text-uppercase small opacity-75">Defects</div>
-          <div class="display-6 mt-2">0</div>
+          <div class="text-uppercase small opacity-75">Current Hour Inspected</div>
+          <div class="display-6 mt-2">{{ qa_current_hour_inspected }}</div>
         </div>
       </div>
     </div>
     <div class="col-md-3">
       <div class="card border-0 shadow-sm bg-danger text-white h-100">
         <div class="card-body">
-          <div class="text-uppercase small opacity-75">DHU</div>
-          <div class="display-6 mt-2">0.00%</div>
+          <div class="text-uppercase small opacity-75">Current Hour Defects</div>
+          <div class="display-6 mt-2">{{ qa_current_hour_defects }}</div>
         </div>
       </div>
     </div>
   </div>
 
-  <div class="row g-4">
-    <div class="col-12">
-      <div class="card shadow-sm border-0 h-100">
-        <div class="card-header bg-white border-0">
-          <h5 class="mb-0">Hourly Inspection Entry</h5>
-        </div>
-        <div class="card-body">
-          <form class="row g-3">
-            <div class="col-md-4">
-              <label class="form-label">Line</label>
-              <select class="form-select">
-                {% for line in assigned_lines %}
-                <option value="{{ line.id }}">{{ line.line_name }}</option>
-                {% empty %}
-                <option value="">No lines assigned</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">Defect Type</label>
-              <select class="form-select">
-                <option>Open Seam</option>
-                <option>Broken Stitch</option>
-                <option>Puckering</option>
-                <option>Shade Variation</option>
-              </select>
-            </div>
-            <div class="col-md-3">
-              <label class="form-label">Inspected</label>
-              <input type="number" class="form-control" value="0">
-            </div>
-            <div class="col-md-3">
-              <label class="form-label">Passed</label>
-              <input type="number" class="form-control" value="0">
-            </div>
-            <div class="col-md-3">
-              <label class="form-label">Defective</label>
-              <input type="number" class="form-control" value="0">
-            </div>
-            <div class="col-md-3">
-              <label class="form-label">Image</label>
-              <input type="file" class="form-control" accept="image/*">
-            </div>
-            <div class="col-12">
-              <label class="form-label">Remarks</label>
-              <textarea class="form-control" rows="3" placeholder="Punching, defect location, operator notes..."></textarea>
-            </div>
-            <div class="col-12 d-flex justify-content-end">
-              <button type="button" class="btn btn-success">Save QA Entry</button>
-            </div>
-          </form>
-        </div>
+  <div class="card shadow-sm border-0">
+    <div class="card-body d-flex flex-wrap align-items-center justify-content-between gap-3">
+      <div>
+        <h5 class="mb-1">Hourly Quality Check</h5>
+        <p class="text-muted mb-0">Enter inspected and passed pieces. Use Defect only when a defect is found.</p>
+      </div>
+      <div class="d-flex gap-2">
+        <a href="{% url 'quality:hourly_check_create' %}" class="btn btn-success">Start Check</a>
+        <a href="{% url 'quality:hourly_check_create' %}?show_defect=1" class="btn btn-outline-danger">Defect</a>
       </div>
     </div>
   </div>

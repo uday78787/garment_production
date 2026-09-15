@@ -13,7 +13,7 @@ the templates.
 import json
 from datetime import timedelta
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -29,6 +29,7 @@ from master_data.models import Article, Factory, FactoryShift, ProductionLineShi
 from planning.models import LineAssignment
 from planning.services.calculations import forecast_daily_output
 from production.models import DailyProductionEntry
+from quality.models import HourlyLineCheck
 
 
 def _daily_detail_rows(request):
@@ -201,6 +202,12 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         entries = self.get_filtered_entries()
+        selected_factory_id = self.get_auto_selected_factory_id()
+        current_factory = Factory.objects.filter(pk=selected_factory_id).first() if selected_factory_id else None
+        current_shift = FactoryShift.get_active_shift_for_factory(current_factory) if current_factory else None
+        context["current_factory_name"] = current_factory.name if current_factory else "No factory selected"
+        context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
+        context["current_hour_label"] = current_shift.current_hour_label() if current_shift else "Not assigned"
         selected_style_id = self.request.GET.get("style")
         if selected_style_id and selected_style_id.isdigit():
             entries = entries.filter(assignment__production_order__article_id=selected_style_id)
@@ -401,7 +408,27 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
         factory = profile.factory if profile else None
         current_shift = FactoryShift.get_active_shift_for_factory(factory) if factory else None
         context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
-        context["current_hour_label"] = current_shift.current_hour_label() if current_shift else "Not assigned"
+        schedule_status = current_shift.current_schedule_status() if current_shift else None
+        context["current_hour_label"] = schedule_status["window"] if schedule_status else "Not assigned"
+        context["current_hour_number"] = schedule_status["label"] if schedule_status else "Not assigned"
+        context["current_hour_on_break"] = schedule_status["on_break"] if schedule_status else False
+        context["current_break_label"] = schedule_status["break_label"] if schedule_status else ""
+        today_checks = HourlyLineCheck.objects.filter(
+            production_line__in=profile.assigned_lines.all(),
+            check_date=timezone.localdate(),
+        ) if profile else HourlyLineCheck.objects.none()
+        current_hour_checks = today_checks.filter(check_hour=schedule_status["number"]) if schedule_status else today_checks.none()
+        context["qa_current_hour_inspected"] = sum(check.inspected_quantity for check in current_hour_checks)
+        context["qa_current_hour_passed"] = sum(check.passed_quantity for check in current_hour_checks)
+        context["qa_current_hour_defects"] = sum(check.defective_quantity for check in current_hour_checks)
+        context["qa_today_inspected"] = sum(check.inspected_quantity for check in today_checks)
+        context["qa_today_passed"] = sum(check.passed_quantity for check in today_checks)
+        context["qa_today_defects"] = sum(check.defective_quantity for check in today_checks)
+        context["qa_today_dhu"] = (
+            context["qa_today_defects"] / context["qa_today_inspected"] * 100
+            if context["qa_today_inspected"] else 0
+        )
+        context["show_defect_panel"] = self.request.GET.get("show_defect") == "1"
         return context
 
 
@@ -484,6 +511,38 @@ class ShiftManagementView(LoginRequiredMixin, TemplateView):
             messages.error(request, "Shift name, start time, and end time are required.")
             return redirect("dashboard:shift_management")
 
+        try:
+            standard_hours = int(request.POST.get("standard_hours") or 8)
+            overtime_hours = int(request.POST.get("overtime_hours") or 0)
+        except (TypeError, ValueError):
+            from django.contrib import messages
+
+            messages.error(request, "Shift hours must be whole numbers.")
+            return redirect("dashboard:shift_management")
+        if not 1 <= standard_hours <= 8 or not 0 <= overtime_hours <= 8:
+            from django.contrib import messages
+
+            messages.error(request, "Regular hours must be 1-8 and overtime hours must be 0-8.")
+            return redirect("dashboard:shift_management")
+
+        hourly_schedule = []
+        for hour in range(1, 9):
+            start = request.POST.get(f"hour_{hour}_start") or ""
+            end = request.POST.get(f"hour_{hour}_end") or ""
+            break_start = request.POST.get(f"hour_{hour}_break_start") or ""
+            break_end = request.POST.get(f"hour_{hour}_break_end") or ""
+            try:
+                if start and end and time.fromisoformat(start) >= time.fromisoformat(end):
+                    raise ValueError
+                if bool(break_start) != bool(break_end) or (break_start and time.fromisoformat(break_start) >= time.fromisoformat(break_end)):
+                    raise ValueError
+            except ValueError:
+                from django.contrib import messages
+
+                messages.error(request, f"Check the start, end, and break times for Hour {hour}.")
+                return redirect("dashboard:shift_management")
+            hourly_schedule.append({"hour": hour, "start": start, "end": end, "break_start": break_start, "break_end": break_end})
+
         breaks_payload = request.POST.get("break_blocks") or "[]"
         try:
             breaks_value = json.loads(breaks_payload) if breaks_payload else []
@@ -505,6 +564,11 @@ class ShiftManagementView(LoginRequiredMixin, TemplateView):
 
         description = request.POST.get("description") or ""
         if break_items:
+            for block in break_items:
+                for schedule in hourly_schedule:
+                    if str(schedule["hour"]) == str(block.get("hour")):
+                        schedule["break_start"] = block["start"]
+                        schedule["break_end"] = block["end"]
             description = json.dumps({"breaks": break_items}, ensure_ascii=True)
 
         FactoryShift.objects.create(
@@ -512,10 +576,11 @@ class ShiftManagementView(LoginRequiredMixin, TemplateView):
             shift_name=shift_name,
             start_time=start_time,
             end_time=end_time,
-            standard_hours=int(request.POST.get("standard_hours") or 8),
-            overtime_hours=int(request.POST.get("overtime_hours") or 0),
+            standard_hours=standard_hours,
+            overtime_hours=overtime_hours,
             overtime_start_time=request.POST.get("overtime_start_time") or None,
             description=description,
+            hourly_schedule=hourly_schedule,
             active=request.POST.get("active") == "on",
             assigned_by=request.user,
         )

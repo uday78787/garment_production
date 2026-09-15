@@ -67,6 +67,7 @@ class FactoryShift(TimeStampedModel):
         help_text="Optional time when the overtime block begins.",
     )
     description = models.TextField(blank=True)
+    hourly_schedule = models.JSONField(default=list, blank=True)
     active = models.BooleanField(default=True)
     assigned_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -108,18 +109,20 @@ class FactoryShift(TimeStampedModel):
             return datetime.combine(start_date, overtime_start) + timedelta(hours=self.overtime_hours)
         return datetime.combine(start_date, self._coerce_time(self.end_time))
 
-    @property
-    def is_active_now(self):
-        now = timezone.localtime().time()
-        if self.start_time <= self.end_time:
-            return self.start_time <= now <= self.end_time
-        return now >= self.start_time or now <= self.end_time
+    def is_active_at(self, current_dt=None):
+        now = timezone.localtime(current_dt) if current_dt else timezone.localtime()
+        current_time = now.time()
+        start_time = self._coerce_time(self.start_time)
+        end_time = self._coerce_time(self.end_time)
+        if start_time <= end_time:
+            return start_time <= current_time <= end_time
+        return current_time >= start_time or current_time <= end_time
 
     @classmethod
     def get_active_shift_for_factory(cls, factory, current_dt=None):
         active_shifts = cls.objects.filter(factory=factory, active=True).order_by("start_time")
         dt = timezone.localtime(current_dt) if current_dt else timezone.localtime()
-        active_now = [shift for shift in active_shifts if shift.is_active_now]
+        active_now = [shift for shift in active_shifts if shift.is_active_at(dt)]
         if active_now:
             return active_now[0]
         if active_shifts:
@@ -132,11 +135,11 @@ class FactoryShift(TimeStampedModel):
         end_time = self._coerce_time(self.end_time)
         overtime_start = self._coerce_time(self.overtime_start_time)
 
-        shift_start_dt = datetime.combine(now.date(), start_time)
+        shift_start_dt = timezone.make_aware(datetime.combine(now.date(), start_time), timezone.get_current_timezone())
         if start_time <= end_time:
-            shift_end_dt = datetime.combine(now.date(), end_time)
+            shift_end_dt = timezone.make_aware(datetime.combine(now.date(), end_time), timezone.get_current_timezone())
         else:
-            shift_end_dt = datetime.combine(now.date() + timedelta(days=1), end_time)
+            shift_end_dt = timezone.make_aware(datetime.combine(now.date() + timedelta(days=1), end_time), timezone.get_current_timezone())
             if now.time() < end_time:
                 shift_start_dt -= timedelta(days=1)
 
@@ -144,7 +147,7 @@ class FactoryShift(TimeStampedModel):
             shift_start_dt -= timedelta(days=1)
 
         if overtime_start:
-            overtime_start_dt = datetime.combine(now.date(), overtime_start)
+            overtime_start_dt = timezone.make_aware(datetime.combine(now.date(), overtime_start), timezone.get_current_timezone())
             if now.time() < overtime_start:
                 overtime_start_dt -= timedelta(days=1)
             if now >= overtime_start_dt:
@@ -159,6 +162,40 @@ class FactoryShift(TimeStampedModel):
     def current_hour_label(self, current_dt=None):
         hour_start, hour_end = self.current_hour_window(current_dt)
         return f"{hour_start.strftime('%H:%M')} - {hour_end.strftime('%H:%M')}"
+
+    def current_schedule_status(self, current_dt=None):
+        """Return the configured hour number and break state for dashboard use."""
+        now = timezone.localtime(current_dt) if current_dt else timezone.localtime()
+        current_time = now.time()
+        for item in self.hourly_schedule or []:
+            try:
+                hour_number = int(item.get("hour"))
+                start = self._coerce_time(item.get("start"))
+                end = self._coerce_time(item.get("end"))
+                break_start = self._coerce_time(item.get("break_start"))
+                break_end = self._coerce_time(item.get("break_end"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if not start or not end:
+                continue
+            if start <= current_time <= end:
+                on_break = bool(break_start and break_end and break_start <= current_time <= break_end)
+                return {
+                    "number": hour_number,
+                    "label": f"Hour {hour_number}",
+                    "window": f"{start.strftime('%H:%M')} - {end.strftime('%H:%M')}",
+                    "on_break": on_break,
+                    "break_label": f"Break {break_start.strftime('%H:%M')} - {break_end.strftime('%H:%M')}" if on_break else "",
+                }
+        hour_start, hour_end = self.current_hour_window(current_dt)
+        fallback_number = max(int((hour_start - timezone.make_aware(datetime.combine(hour_start.date(), self._coerce_time(self.start_time)), timezone.get_current_timezone())).total_seconds() // 3600) + 1, 1)
+        return {
+            "number": fallback_number,
+            "label": f"Hour {fallback_number}",
+            "window": f"{hour_start.strftime('%H:%M')} - {hour_end.strftime('%H:%M')}",
+            "on_break": False,
+            "break_label": "",
+        }
 
     @classmethod
     def default_factory_presets(cls, factory, assigned_by=None):

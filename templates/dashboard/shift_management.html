@@ -209,17 +209,14 @@
 <div class="container-fluid py-3 px-3">
   <div class="shift-shell">
     <div class="shift-topbar">
-      <div class="shift-title">Manage Shifts</div>
+      <div class="shift-title">Factory Shift Management</div>
       <div class="shift-actions">
-        <select class="shift-control" name="factory" aria-label="Location">
+        <select class="shift-control" id="factory-filter" name="factory" aria-label="Location">
           {% for factory in factories %}
             <option value="{{ factory.pk }}" {% if selected_factory_id == factory.pk %}selected{% endif %}>{{ factory.name }}</option>
           {% endfor %}
         </select>
-        <button type="button" class="btn btn-outline-secondary btn-sm">IMPORT</button>
-        <button type="button" class="btn btn-outline-secondary btn-sm">CALENDAR VIEW</button>
-        <button type="button" class="btn btn-outline-secondary btn-sm">LINE SHIFT VIEW</button>
-        <button type="button" class="btn btn-primary-soft btn-sm">+ CREATE SHIFT</button>
+        <a href="#shift-editor" class="btn btn-primary-soft btn-sm">+ CREATE SHIFT</a>
       </div>
     </div>
 
@@ -231,8 +228,7 @@
             <th>Code</th>
             <th>Start Time</th>
             <th>End Time</th>
-            <th>Shift Minutes</th>
-            <th>Actions</th>
+            <th>Shift Hours</th>
           </tr>
         </thead>
         <tbody>
@@ -243,17 +239,12 @@
               <td>{{ shift.preset_code|default:shift.shift_name|lower|cut:' ' }}</td>
               <td>{{ shift.start_time|time:"h:i A" }}</td>
               <td>{{ shift.end_time|time:"h:i A" }}</td>
-              <td>{{ shift.total_shift_hours|default:480 }}</td>
-              <td>
-                <button type="button" class="icon-btn" title="Edit"><i class="fa-solid fa-pen-to-square"></i></button>
-                <button type="button" class="icon-btn" title="Assign"><i class="fa-solid fa-user-group"></i></button>
-                <button type="button" class="icon-btn" title="Delete"><i class="fa-solid fa-trash"></i></button>
-              </td>
+              <td>{{ shift.total_shift_hours }}</td>
             </tr>
             {% endfor %}
           {% else %}
             <tr>
-              <td colspan="6" class="text-center text-muted py-4">No shifts configured for this location yet.</td>
+              <td colspan="5" class="text-center text-muted py-4">No shifts configured for this location yet.</td>
             </tr>
           {% endif %}
         </tbody>
@@ -261,7 +252,7 @@
     </div>
   </div>
 
-  <div class="manage-panel">
+  <div class="manage-panel" id="shift-editor">
     <h4>Manage Shifts</h4>
     <div class="info-note">
       This shift cannot be edited because it is already assigned to a production line. Please create a new shift instead of modifying the existing one.
@@ -297,6 +288,14 @@
         <div class="field">
           <label for="overtime_hours">Overtime Hours</label>
           <input id="overtime_hours" type="number" name="overtime_hours" min="0" max="8" value="0">
+        </div>
+        <div class="field">
+          <label for="overtime_start_time">Overtime Start Time</label>
+          <input id="overtime_start_time" type="time" name="overtime_start_time">
+        </div>
+        <div class="field">
+          <label for="description">Notes</label>
+          <input id="description" type="text" name="description" placeholder="Optional shift notes">
         </div>
       </div>
 
@@ -343,6 +342,10 @@
 
 <script>
   (function () {
+    const factoryFilter = document.getElementById('factory-filter');
+    factoryFilter.addEventListener('change', () => {
+      window.location.href = `${window.location.pathname}?factory=${factoryFilter.value}`;
+    });
     const breakBlocks = [];
     const form = document.getElementById('shift-form');
     const hiddenBreaks = document.getElementById('break_blocks');

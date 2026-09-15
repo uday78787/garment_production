@@ -4,6 +4,25 @@
 <h3><i class="fa-solid fa-gauge"></i> My Dashboard</h3>
 <p class="text-muted">Production overview for your assigned lines {% if selected_date_from or selected_date_to %}(filtered){% else %}(last 14 days){% endif %}.</p>
 
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card text-bg-primary shadow-sm">
+            <div class="card-body">
+                <div class="small text-uppercase opacity-75">Current Shift</div>
+                <div class="fs-4">{{ current_shift }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-bg-info shadow-sm">
+            <div class="card-body">
+                <div class="small text-uppercase opacity-75">Current Hour</div>
+                <div class="fs-4">{{ current_hour_label }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="d-flex justify-content-end mb-3">
     <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#dateFilterModal">
         <i class="fa-solid fa-calendar-days"></i> Date Filter

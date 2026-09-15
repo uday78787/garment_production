@@ -4,10 +4,11 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from accounts.models import UserProfile
 from master_data.models import Article, Factory, FactoryShift, ProductionLine
-from planning.models import ProductionOrder
+from planning.models import LineAssignment, ProductionOrder
 from quality.calculations import calculate_defect_rate, calculate_dhu, calculate_fpy
 from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail, InspectionDefect, QualityInspection
 
@@ -124,6 +125,50 @@ class HourlyQualityCheckTest(TestCase):
 
         self.assertEqual(check.total_defects, 25)
         self.assertAlmostEqual(check.dhu, 10.416666666666666)
+
+    def test_hourly_check_post_saves_and_redirects(self):
+        LineAssignment.objects.create(
+            production_line=self.line,
+            production_order=self.order,
+            start_date="2026-09-01",
+            default_manpower=30,
+            working_minutes_per_operator=480,
+            start_efficiency="0.25",
+            daily_efficiency_growth="0.05",
+            max_efficiency="0.60",
+        )
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.assigned_lines.add(self.line)
+        self.user.profile.save()
+        self.client.force_login(self.user)
+        defect = DefectMaster.objects.create(
+            defect_code="D-POST",
+            defect_name="Loose Thread",
+            category=DefectMaster.Category.SEWING,
+            severity=DefectMaster.Severity.MINOR,
+        )
+
+        response = self.client.post(
+            reverse("quality:hourly_check_create"),
+            {
+                "production_line": self.line.pk,
+                "production_order": self.order.pk,
+                "article": self.article.pk,
+                "inspected_quantity": "100",
+                "passed_quantity": "95",
+                "defect_code": defect.defect_code,
+                "defect_quantity": "5",
+                "repaired_quantity": "5",
+                "resolved": "on",
+            },
+        )
+
+        self.assertRedirects(response, reverse("quality:hourly_check_list"))
+        self.assertTrue(HourlyLineCheck.objects.filter(production_line=self.line, inspected_quantity=100).exists())
+        dashboard_response = self.client.get(reverse("dashboard:qa_dashboard"))
+        self.assertEqual(dashboard_response.context["qa_today_passed"], 95)
+        self.assertEqual(dashboard_response.context["qa_today_defects"], 5)
 
 
 class QAPermissionTest(TestCase):
