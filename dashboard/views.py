@@ -696,8 +696,10 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
             check_hour=current_hour_number,
             shift_name=current_shift.shift_name if current_shift else "",
         )
-        current_inspected, current_passed, current_defects = _effective_qa_totals(current_hour_checks)
-        shift_inspected, shift_passed, shift_defects = _effective_qa_totals(dashboard_checks)
+        current_inspected, current_passed, _ = _effective_qa_totals(current_hour_checks)
+        shift_inspected, shift_passed, _ = _effective_qa_totals(dashboard_checks)
+        current_defects = _marked_qa_defects(current_hour_checks)
+        shift_defects = _marked_qa_defects(dashboard_checks)
         context["qa_current_hour_inspected"] = current_inspected
         context["qa_current_hour_passed"] = current_passed
         context["qa_current_hour_alter"] = current_defects
@@ -713,7 +715,8 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
                 check_hour=check_hour,
                 production_line_id=line_id,
             )
-            summary_inspected, summary_passed, summary_defects = _effective_qa_totals(summary_checks)
+            summary_inspected, summary_passed, _ = _effective_qa_totals(summary_checks)
+            summary_defects = _marked_qa_defects(summary_checks)
             hourly_report.append({
                 "date": check_date.isoformat(),
                 "shift": shift_name or "Legacy shift",
@@ -771,7 +774,7 @@ def _qa_profile(request):
 
 
 def _effective_qa_totals(checks):
-    """Reconcile repaired defect details with legacy hourly check totals."""
+    """Calculate inspected and passed pieces from pass and defect records."""
     inspected = passed = defects = 0
     for check in checks:
         detail_totals = check.details.aggregate(
@@ -781,17 +784,29 @@ def _effective_qa_totals(checks):
         recorded_defects = detail_totals["defects"] or 0
         repaired = detail_totals["repaired"] or 0
         if recorded_defects:
-            unresolved = max(recorded_defects - repaired, 0)
-            stale_repaired = max(check.defective_quantity - unresolved, 0)
+            # Older repair actions already added repaired pieces to the stored
+            # passed value. Remove them before applying the canonical formula.
+            original_passed = max(check.passed_quantity - repaired, 0)
+            effective_passed = original_passed + repaired
+            effective_inspected = original_passed + recorded_defects
+            defects += recorded_defects
         else:
-            unresolved = check.defective_quantity
-            stale_repaired = 0
-        effective_passed = check.passed_quantity + stale_repaired
-        effective_inspected = max(check.inspected_quantity, effective_passed + unresolved)
+            original_passed = check.passed_quantity
+            effective_passed = original_passed
+            effective_inspected = max(check.inspected_quantity, original_passed + check.defective_quantity)
+            defects += check.defective_quantity
         inspected += effective_inspected
         passed += effective_passed
-        defects += unresolved
     return inspected, passed, defects
+
+
+def _marked_qa_defects(checks):
+    """Count all defect pieces marked, including defects later repaired."""
+    total = 0
+    for check in checks:
+        marked = check.details.aggregate(total=Sum("defect_quantity"))["total"]
+        total += marked if marked is not None else check.defective_quantity
+    return total
 
 
 @require_GET
@@ -1040,8 +1055,10 @@ def qa_repair_defect(request):
         shift_name=check.shift_name,
     )
     current_checks = shift_checks.filter(check_hour=check.check_hour)
-    shift_inspected, shift_passed, shift_defects = _effective_qa_totals(shift_checks)
-    current_inspected, current_passed, current_defects = _effective_qa_totals(current_checks)
+    shift_inspected, shift_passed, _ = _effective_qa_totals(shift_checks)
+    current_inspected, current_passed, _ = _effective_qa_totals(current_checks)
+    shift_defects = _marked_qa_defects(shift_checks)
+    current_defects = _marked_qa_defects(current_checks)
 
     return JsonResponse({
         "repaired_quantity": repaired_quantity,

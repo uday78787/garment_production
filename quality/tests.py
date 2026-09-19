@@ -169,7 +169,7 @@ class HourlyQualityCheckTest(TestCase):
         self.assertTrue(HourlyLineCheck.objects.filter(production_line=self.line, inspected_quantity=100).exists())
         dashboard_response = self.client.get(reverse("dashboard:qa_dashboard"))
         self.assertEqual(dashboard_response.context["qa_shift_passed"], 100)
-        self.assertEqual(dashboard_response.context["qa_shift_defects"], 0)
+        self.assertEqual(dashboard_response.context["qa_shift_defects"], 5)
         self.assertEqual(dashboard_response.context["qa_current_hour_inspected"], 100)
         self.assertEqual(dashboard_response.context["qa_current_hour_passed"], 100)
 
@@ -232,7 +232,7 @@ class HourlyQualityCheckTest(TestCase):
         repair_payload = repair_response.json()
         self.assertEqual(repair_payload["shift_totals"]["inspected"], 4)
         self.assertEqual(repair_payload["shift_totals"]["passed"], 3)
-        self.assertEqual(repair_payload["shift_totals"]["defects"], 1)
+        self.assertEqual(repair_payload["shift_totals"]["defects"], 4)
 
     def test_checker_pass_actions_are_saved_to_hourly_check(self):
         LineAssignment.objects.create(

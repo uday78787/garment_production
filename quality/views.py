@@ -3,6 +3,7 @@ from datetime import datetime
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
@@ -341,7 +342,10 @@ def quality_hold_list(request):
 
 @login_required
 def defect_database(request):
-    """Filtered defect register for QA, factory admins, and supervisors."""
+    """Filtered defect register for superusers and factory admins."""
+    profile = getattr(request.user, "profile", None)
+    if not request.user.is_superuser and not (profile and profile.is_admin):
+        raise PermissionDenied("Only administrators can access the defect database.")
     _, lines, _, articles = quality_scope(request.user)
     defects = HourlyLineCheckDetail.objects.filter(
         hourly_check__production_line__in=lines,
@@ -401,6 +405,9 @@ def defect_database(request):
 
 @login_required
 def export_defect_database_excel(request):
+    profile = getattr(request.user, "profile", None)
+    if not request.user.is_superuser and not (profile and profile.is_admin):
+        raise PermissionDenied("Only administrators can export the defect database.")
     _, lines, _, _ = quality_scope(request.user)
     records = HourlyLineCheckDetail.objects.filter(
         hourly_check__production_line__in=lines,
