@@ -18,11 +18,11 @@ from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 from common.models import AuditLog
 from common.utils import write_audit_log
 
-from .forms import DailyProductionEntryForm
+from .forms import DailyProductionEntryForm, LineShiftManpowerForm
 from .models import DailyProductionEntry
 from django.core.exceptions import ValidationError
 from datetime import date
-from master_data.models import Article, ProductionLine
+from master_data.models import Article, FactoryShift, LineShiftManpower, ProductionLine
 from planning.models import LineAssignment
 
 
@@ -277,3 +277,58 @@ class DailyProductionEntryDeleteView(ScopedQuerysetMixin, DeleteView):
         response = super().form_valid(form)
         messages.success(self.request, "Production entry deleted.")
         return response
+
+
+class LineShiftManpowerView(LoginRequiredMixin, ListView):
+    template_name = "production/manpower.html"
+    context_object_name = "manpower_entries"
+
+    def dispatch(self, request, *args, **kwargs):
+        profile = getattr(request.user, "profile", None)
+        if not request.user.is_superuser and not (profile and profile.can_manage_manpower):
+            raise PermissionDenied("Only the IE Department can enter line manpower.")
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_scope(self):
+        profile = getattr(self.request.user, "profile", None)
+        if self.request.user.is_superuser:
+            return ProductionLine.objects.filter(factory__active_status=True), FactoryShift.objects.filter(active=True, factory__active_status=True)
+        return (
+            profile.assigned_lines.filter(factory=profile.factory, factory__active_status=True),
+            FactoryShift.objects.filter(factory=profile.factory, active=True),
+        )
+
+    def get_queryset(self):
+        lines, shifts = self.get_scope()
+        return LineShiftManpower.objects.filter(
+            production_line__in=lines,
+            shift__in=shifts,
+        ).select_related("production_line", "shift", "factory", "entered_by")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        lines, shifts = self.get_scope()
+        context["form"] = kwargs.get("form") or LineShiftManpowerForm(user=self.request.user)
+        context["lines"] = lines.order_by("line_name")
+        context["shifts"] = shifts.order_by("start_time")
+        return context
+
+    def post(self, request, *args, **kwargs):
+        form = LineShiftManpowerForm(request.POST, user=request.user)
+        if form.is_valid():
+            line = form.cleaned_data["production_line"]
+            shift = form.cleaned_data["shift"]
+            entry_date = form.cleaned_data["entry_date"]
+            entry, created = LineShiftManpower.objects.get_or_create(
+                production_line=line,
+                shift=shift,
+                entry_date=entry_date,
+                defaults={"manpower": form.cleaned_data["manpower"], "entered_by": request.user},
+            )
+            if not created:
+                entry.manpower = form.cleaned_data["manpower"]
+                entry.entered_by = request.user
+                entry.save()
+            messages.success(request, f"Manpower saved for {line.line_name} / {shift.shift_name}.")
+            return self.get(request, *args, **kwargs)
+        return self.render_to_response(self.get_context_data(form=form))

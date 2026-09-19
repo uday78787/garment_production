@@ -83,6 +83,30 @@
     </div>
 </div>
 
+{% if qa_defect_breakdown %}
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <h5 class="card-title"><i class="fa-solid fa-bug"></i> Defect Breakdown</h5>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead>
+                    <tr><th>Defect Code</th><th>Defect Name</th><th class="text-end">Qty</th></tr>
+                </thead>
+                <tbody>
+                    {% for defect in qa_defect_breakdown %}
+                    <tr>
+                        <td>{{ defect.defect__defect_code }}</td>
+                        <td>{{ defect.defect__defect_name }}</td>
+                        <td class="text-end">{{ defect.total_defects }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <div class="row g-3 mb-4">
     <div class="col-md-6">
         <div class="card shadow-sm"><div class="card-body">
@@ -157,7 +181,7 @@
                         <th>Date</th><th>Line</th><th>Article</th><th class="text-end">Manpower</th>
                         <th class="text-end">Available Min</th><th class="text-end">Produced Min</th>
                         <th class="text-end">Planned Eff %</th><th class="text-end">Actual Eff %</th>
-                        <th class="text-end">Target</th><th class="text-end">Actual Production</th>
+                        <th class="text-end">Target</th><th class="text-end">Actual Production</th><th class="text-end">Defect Pcs</th><th class="text-end">DHU %</th>
                         <th class="text-end">Target vs Actual</th><th class="text-end">Gain/Loss Min</th>
                     </tr>
                 </thead>
@@ -174,11 +198,13 @@
                     <td class="text-end">{{ row.actual_efficiency|floatformat:2 }}%</td>
                     <td class="text-end">{{ row.target_output|floatformat:0 }}</td>
                     <td class="text-end">{{ row.actual_output|floatformat:0 }}</td>
+                    <td class="text-end">{{ row.defect_pieces|floatformat:0 }}</td>
+                    <td class="text-end">{{ row.dhu|floatformat:2 }}%</td>
                     <td class="text-end fw-bold {% if row.difference > 0 %}text-success{% elif row.difference < 0 %}text-danger{% else %}text-muted{% endif %}">{{ row.difference|floatformat:0 }}</td>
                     <td class="text-end fw-bold {% if row.gain_loss_minutes > 0 %}text-success{% elif row.gain_loss_minutes < 0 %}text-danger{% else %}text-muted{% endif %}">{{ row.gain_loss_minutes|floatformat:2 }}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="12" class="text-center text-muted">No daily production data is available for the selected factory and style.</td></tr>
+                <tr><td colspan="14" class="text-center text-muted">No daily production data is available for the selected factory and style.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>

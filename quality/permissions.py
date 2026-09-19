@@ -26,7 +26,7 @@ def user_can_access_quality_line(user, production_line):
     if profile is None:
         return False
     if getattr(profile, "is_admin", False):
-        return True
+        return production_line.factory_id in profile.accessible_factories.values_list("id", flat=True)
     if profile.role == "QA_PERMISSION":
         return production_line in profile.assigned_lines.all()
     return production_line in profile.assigned_lines.all()

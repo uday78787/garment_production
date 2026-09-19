@@ -100,3 +100,53 @@ class ReportAccessTests(TestCase):
         self.assertContains(response, "10 Aug 2026")
         self.assertContains(response, "date_from=2026-08-10&amp;date_to=2026-08-10")
         self.assertNotContains(response, "02 Aug 2026")
+
+    def test_factory_admin_cannot_create_or_see_other_factory_records(self):
+        admin_factory = Factory.objects.create(name="Admin Factory", code="ADMIN")
+        admin_user = admin_factory.users.get(role=UserProfile.Role.FACTORY_ADMIN).user
+        admin_user.set_password("password")
+        admin_user.save()
+
+        admin_line = ProductionLine.objects.create(
+            factory=admin_factory, line_name="Admin Line", capacity_manpower=20
+        )
+        admin_order = ProductionOrder.objects.create(
+            order_number="PO-ADMIN",
+            article=Article.objects.create(article_code="ART-ADMIN", article_name="Admin Article", sam=Decimal("20")),
+            order_quantity=50,
+            customer_name="Customer Admin",
+            delivery_date=date(2026, 9, 1),
+        )
+        admin_assignment = LineAssignment.objects.create(
+            production_line=admin_line,
+            production_order=admin_order,
+            start_date=date(2026, 8, 1),
+            default_manpower=10,
+            working_minutes_per_operator=480,
+            start_efficiency=Decimal("0.25"),
+            daily_efficiency_growth=Decimal("0.05"),
+            max_efficiency=Decimal("0.60"),
+        )
+        DailyProductionEntry.objects.create(
+            assignment=admin_assignment,
+            production_date=date(2026, 8, 2),
+            actual_manpower=10,
+            working_minutes=60,
+            actual_output=1,
+            planned_efficiency=Decimal("0.5"),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        self.client.logout()
+        self.client.login(username=admin_user.username, password="password")
+
+        response = self.client.get("/admin/master_data/factory/add/")
+        self.assertEqual(response.status_code, 403)
+
+        response = self.client.get(reverse("reports:production_report"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "PO-ADMIN")
+        self.assertNotContains(response, "PO-1")
+        self.assertNotContains(response, "PO-2")
+        self.assertNotContains(response, "PO-3")

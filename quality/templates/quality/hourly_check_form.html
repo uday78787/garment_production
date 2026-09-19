@@ -17,19 +17,10 @@
         {% else %}<select name="production_line" class="form-select" required><option value="">Select assigned line</option>{% for line in assigned_lines %}<option value="{{ line.id }}">{{ line.line_name }}</option>{% endfor %}</select>{% endif %}
       </div>
       <div class="col-md-3">
-        <label class="form-label">Production Order</label>
-        <select name="production_order" class="form-select" required>
-          <option value="">Select order</option>
-          {% for order in production_orders %}
-          <option value="{{ order.id }}">{{ order.order_number }} - {{ order.article.article_code }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">Article</label>
+        <label class="form-label">Running Style / Article</label>
         <select name="article" class="form-select" required>
-          <option value="">Select article</option>
-          {% for article in articles %}
+          <option value="">Select running article</option>
+          {% for article in running_articles %}
           <option value="{{ article.id }}">{{ article.article_code }} - {{ article.article_name }}</option>
           {% endfor %}
         </select>

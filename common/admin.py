@@ -30,6 +30,37 @@ class FactoryScopedAdminMixin:
             return queryset.filter(assignment__production_line__in=profile.assigned_lines.all())
         return queryset.none()
 
+    def has_add_permission(self, request):
+        if request.user.is_superuser:
+            return True
+        profile = getattr(request.user, "profile", None)
+        if profile is None or not profile.is_admin:
+            return False
+        model_name = self.model.__name__
+        return model_name != "Factory"
+
+    def has_view_permission(self, request, obj=None):
+        if request.user.is_superuser:
+            return True
+        profile = getattr(request.user, "profile", None)
+        if profile is None:
+            return False
+        if obj is None:
+            return bool(profile.is_admin)
+        if profile.is_admin:
+            model_name = self.model.__name__
+            if model_name == "Factory":
+                return obj.pk in profile.accessible_factories.values_list("pk", flat=True)
+            if model_name == "ProductionLine":
+                return obj.factory_id in profile.accessible_factories.values_list("pk", flat=True)
+            if model_name == "ProductionOrder":
+                return obj.assignments.filter(production_line__factory__in=profile.accessible_factories.all()).exists()
+            if model_name == "LineAssignment":
+                return obj.production_line.factory_id in profile.accessible_factories.values_list("pk", flat=True)
+            if model_name == "DailyProductionEntry":
+                return obj.assignment.production_line.factory_id in profile.accessible_factories.values_list("pk", flat=True)
+        return False
+
     def has_change_permission(self, request, obj=None):
         if obj is None:
             return super().has_change_permission(request, obj)

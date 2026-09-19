@@ -22,6 +22,7 @@ class UserProfile(models.Model):
         DASHBOARD_VIEWER = "DASHBOARD_VIEWER", "Dashboard Viewer"
         SUPERVISOR = "SUPERVISOR", "Supervisor"
         QA_PERMISSION = "QA_PERMISSION", "QA Permission"
+        IE_PERMISSION = "IE_PERMISSION", "IE Department"
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile"
@@ -79,6 +80,10 @@ class UserProfile(models.Model):
         if self.is_admin:
             return True
         return self.assigned_lines.filter(pk=production_line.pk).exists()
+
+    @property
+    def can_manage_manpower(self) -> bool:
+        return self.role == self.Role.IE_PERMISSION
 
 
 class PasswordResetOTP(models.Model):

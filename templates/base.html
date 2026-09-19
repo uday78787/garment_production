@@ -34,6 +34,7 @@
                 </span>
                 <span class="text-white-50">|</span>
                 <span class="fw-semibold" id="qa-live-time">Live Time (IST)</span>
+                <a href="{% url 'quality:defect_database' %}" class="btn btn-outline-light btn-sm px-3 py-1"><i class="fa-solid fa-database"></i> Defect Database</a>
                 <form method="post" action="{% url 'accounts:logout' %}" class="d-inline ms-2">
                     {% csrf_token %}
                     <button type="submit" class="btn btn-outline-light btn-sm px-3 py-1">Logout</button>
@@ -104,6 +105,9 @@
                     </li>
                     {% endif %}
                     <li class="nav-item"><a class="nav-link" href="{% url 'production:entry_list' %}"><i class="fa-solid fa-list-check"></i> Production Entries</a></li>
+                    {% if user.is_superuser or user.profile.role == 'IE_PERMISSION' %}
+                    <li class="nav-item"><a class="nav-link" href="{% url 'production:manpower' %}"><i class="fa-solid fa-people-group"></i> IE Manpower</a></li>
+                    {% endif %}
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                             <i class="fa-solid fa-shield-check"></i> Quality
@@ -114,6 +118,7 @@
                             <li><a class="dropdown-item" href="{% url 'quality:inspection_create' %}"><i class="fa-solid fa-plus"></i> New Inspection</a></li>
                             <li><a class="dropdown-item" href="{% url 'quality:defect_master_list' %}"><i class="fa-solid fa-bug"></i> Defect Master</a></li>
                             <li><a class="dropdown-item" href="{% url 'quality:hourly_check_list' %}"><i class="fa-solid fa-clock"></i> Hourly Line Checks</a></li>
+                            <li><a class="dropdown-item" href="{% url 'quality:defect_database' %}"><i class="fa-solid fa-database"></i> Defect Database</a></li>
                             <li><a class="dropdown-item" href="{% url 'quality:article_defect_bulletin' %}"><i class="fa-solid fa-file-export"></i> Defect Bulletin</a></li>
                             <li><a class="dropdown-item" href="{% url 'quality:quality_hold_list' %}"><i class="fa-solid fa-ban"></i> Quality Holds</a></li>
                         </ul>

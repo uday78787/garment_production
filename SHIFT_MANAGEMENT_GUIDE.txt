@@ -38,6 +38,11 @@ The system is designed around the following user roles:
    - Can view dashboards according to assigned scope.
    - Restricted from manipulating factory-level setup or shift schedule.
 
+5. IE Department
+   - Enters manpower for each production line, date, and shift.
+   - Can update manpower without changing factory shift definitions.
+   - Uses the IE Manpower page; production users do not re-enter IE manpower.
+
 2. System startup and login
 ---------------------------
 1. Open the project.
@@ -74,6 +79,7 @@ The superuser is the foundation for all operations.
    - Supervisor
    - Dashboard Viewer
    - QA Permission
+   - IE Department
 3. Assign the correct factory.
 4. Assign relevant production lines to the user if they need line-based access.
 5. Save the user profile.
@@ -88,15 +94,43 @@ Important:
    Direct URL:
    http://127.0.0.1:8000/dashboard/admin/shift-management/
 2. Select the target factory.
-3. Set the shift name, start time, end time, total shift hours, overtime, and
-   active status.
-4. Configure Hour 1 through Hour 8 as needed.
+3. Create or confirm these three shifts:
+   - DAY SHIFT: 480 minutes (8 hours)
+   - OT SHIFT: 180 minutes (3 hours)
+   - NIGHT SHIFT: 480 minutes (8 hours)
+4. Set each shift's start time, end time, active status, and hourly schedule.
 5. Add break timings where required.
 6. Save the shift.
-7. Confirm that the active shift matches the current production timing.
+7. Confirm that only the correct operational shifts are active.
 
 The superuser controls the factory-wide shift setup. Production users and QA
 users cannot modify the factory shift definition.
+
+3.4 Configure the IE Department user
+1. Open Django admin > Users.
+2. Create a user or open an existing user.
+3. Set the profile role to `IE Department`.
+4. Assign the correct factory.
+5. Assign the production lines that the IE user may manage.
+6. Save the profile and log in as the IE user to verify access.
+
+3.5 Enter daily line manpower as IE
+1. Open:
+   http://localhost:8001/production/manpower/
+2. Select the production line.
+3. Select DAY SHIFT, OT SHIFT, or NIGHT SHIFT.
+4. Select the entry date.
+5. Enter the actual manpower for that line and shift.
+6. Click Save.
+
+The system automatically stores the shift minutes:
+- DAY SHIFT: 480
+- OT SHIFT: 180
+- NIGHT SHIFT: 480
+
+There is one manpower record per line, shift, and date. Saving the same
+combination again updates the existing value. The value cannot exceed the
+line's configured manpower capacity.
 
 4. Factory admin and supervisor work
 ------------------------------------
@@ -131,9 +165,11 @@ This is the daily data-entry process for the line operator or production user.
 
 5.3 Enter a daily production entry
 1. Open the production entry form.
-2. Select the assignment, date, manpower, working minutes, and actual output.
+2. Select the assignment, shift, date, and actual output.
 3. Enter defective pieces if applicable.
 4. Save the record.
+5. When a shift is selected, the system uses the IE manpower record for the
+   selected line, shift, and date. The production user does not re-enter it.
 5. The system recalculates:
    - produced minutes
    - available minutes
@@ -146,7 +182,8 @@ This is the daily data-entry process for the line operator or production user.
 - Actual manpower cannot exceed the line capacity.
 - Production date cannot be before assignment start date.
 - Actual output cannot exceed the remaining order quantity.
-- Working minutes cannot exceed the configured line assignment limit.
+- IE manpower must be entered first when a shift is selected.
+- Shift working minutes come from the configured shift: 480, 180, or 480.
 - A production record is usually created once per assignment per date.
 
 5.5 Production output responsibility
@@ -162,7 +199,7 @@ quality inspection.
 6.1 Open the QA dashboard
 1. Log in as a QA Permission user.
 2. The app redirects to:
-   http://127.0.0.1:8000/dashboard/qa/
+   http://localhost:8001/dashboard/qa/
 3. The dashboard shows:
    - current shift
    - current hour window
@@ -179,21 +216,32 @@ quality inspection.
 6.3 Create an hourly end-of-line quality check
 1. Open the hourly check entry form.
 2. Select the assigned factory and production line.
-3. Select the production order and article.
-4. Enter inspected quantity and passed quantity.
-5. Add defect rows with:
+3. In the QA dashboard, open the `Running Style / Article` dropdown.
+4. Select the running article/style to inspect.
+5. Click the `Search` button.
+6. Confirm the selected article remains displayed before entering data.
+7. Enter PASS pieces using the PASS action.
+8. For alteration/rejection, open the defect action and select:
    - defect code
    - defect quantity
    - repaired quantity
    - resolved status
    - defect image if required
-6. Save the check.
+9. Save or submit the quality check.
+
+QA does not need to select a Production Line Assignment to choose the style.
+The article list contains running factory articles only. The system finds the
+active production order for the selected article automatically. QA access to
+the physical production line is still restricted to lines assigned to the QA
+user.
 
 6.4 Quality validation rules
 - Passed quantity + defective quantity cannot exceed inspected quantity.
 - Repaired quantity cannot exceed defective quantity.
 - Each defect entry must match a valid defect definition.
 - QA must use the proper assigned lines; otherwise the system restricts access.
+- A running article must be selected and searched before PASS or defect actions.
+- The selected article must belong to an active or in-progress factory order.
 
 6.5 QA/Checker responsibility
 The checker is the final quality gate for the line output. Their responsibilities:
@@ -232,20 +280,23 @@ Reports and dashboards pull values from both production and quality data, such a
 Below is the complete process flow from top to bottom:
 
 1. Superuser creates the factory and master setup.
-2. Superuser creates or updates shifts and active schedules.
-3. Superuser configures users and assigns roles to factory/line access.
-4. Factory Admin and Supervisor confirm production orders and line assignments.
-5. Production user enters daily production records for assigned lines.
-6. QA checker reviews the current shift and current hour.
-7. QA checker enters hourly line quality inspection data.
-8. Defects are recorded and repaired where needed.
-9. Quality and production dashboards update with live summaries.
-10. Management reviews output, efficiency, and defect trends.
+2. Superuser creates or updates DAY, OT, and NIGHT shifts.
+3. Superuser creates users and assigns factory/line access.
+4. IE user enters manpower for each line, shift, and date.
+5. Factory Admin and Supervisor confirm production orders and line assignments.
+6. Production user enters daily production output and selects the relevant shift.
+7. QA checker reviews the current shift and current hour.
+8. QA checker selects a running article and clicks Search.
+9. QA checker enters PASS and defect/alteration data.
+10. Defects are repaired and closed where needed.
+11. Quality and production dashboards update with live summaries.
+12. Management reviews output, efficiency, and defect trends.
 
 9. Access and restriction rules
 --------------------------------
 - Superuser can access shift management and factory-level master setup.
 - QA Permission users cannot modify shift management settings.
+- IE Department users can enter manpower but cannot modify shift definitions.
 - Production users see only their assigned line data.
 - QA users see only the assigned QA scope for their factory/lines.
 - Factory Admins manage factory-local operations, but do not replace the superuser
@@ -291,6 +342,16 @@ QA user cannot access assigned lines
 - Confirm the user role is QA Permission.
 - Ensure assigned lines are linked to the user profile.
 - Check factory assignment and line matching.
+
+QA user cannot see a required article
+- Confirm the article has a running order with status Pending or In Progress.
+- Confirm the order belongs to the QA user's factory.
+- Select the article from the dropdown and click Search.
+
+Production entry requires IE manpower
+- Open the IE Manpower page.
+- Enter manpower for the same line, shift, and date used in production.
+- Return to Production Entries and select that shift.
 
 Production user cannot enter data
 - Confirm the user is assigned to the correct line.

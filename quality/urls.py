@@ -16,4 +16,6 @@ urlpatterns = [
     path("bulletin/export/excel/", views.export_article_defect_bulletin_excel, name="export_article_defect_bulletin_excel"),
     path("bulletin/export/pdf/", views.export_article_defect_bulletin_pdf, name="export_article_defect_bulletin_pdf"),
     path("holds/", views.quality_hold_list, name="quality_hold_list"),
+    path("defect-database/", views.defect_database, name="defect_database"),
+    path("defect-database/export/excel/", views.export_defect_database_excel, name="export_defect_database_excel"),
 ]

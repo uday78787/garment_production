@@ -168,10 +168,10 @@ class HourlyQualityCheckTest(TestCase):
         self.assertRedirects(response, reverse("quality:hourly_check_list"))
         self.assertTrue(HourlyLineCheck.objects.filter(production_line=self.line, inspected_quantity=100).exists())
         dashboard_response = self.client.get(reverse("dashboard:qa_dashboard"))
-        self.assertEqual(dashboard_response.context["qa_shift_passed"], 95)
-        self.assertEqual(dashboard_response.context["qa_shift_defects"], 5)
+        self.assertEqual(dashboard_response.context["qa_shift_passed"], 100)
+        self.assertEqual(dashboard_response.context["qa_shift_defects"], 0)
         self.assertEqual(dashboard_response.context["qa_current_hour_inspected"], 100)
-        self.assertEqual(dashboard_response.context["qa_current_hour_passed"], 95)
+        self.assertEqual(dashboard_response.context["qa_current_hour_passed"], 100)
 
     def test_checker_can_mark_repair_and_pass_defect_from_dashboard(self):
         LineAssignment.objects.create(
@@ -227,6 +227,12 @@ class HourlyQualityCheckTest(TestCase):
         self.assertEqual(detail.repaired_quantity, 3)
         self.assertIsNotNone(detail.resolved_at)
         self.assertEqual(detail.hourly_check.passed_quantity, 3)
+        self.assertEqual(detail.hourly_check.inspected_quantity, 4)
+        self.assertEqual(detail.hourly_check.defective_quantity, 1)
+        repair_payload = repair_response.json()
+        self.assertEqual(repair_payload["shift_totals"]["inspected"], 4)
+        self.assertEqual(repair_payload["shift_totals"]["passed"], 3)
+        self.assertEqual(repair_payload["shift_totals"]["defects"], 1)
 
     def test_checker_pass_actions_are_saved_to_hourly_check(self):
         LineAssignment.objects.create(
@@ -258,6 +264,43 @@ class HourlyQualityCheckTest(TestCase):
         dashboard_response = self.client.get(reverse("dashboard:qa_dashboard"))
         self.assertEqual(dashboard_response.context["qa_current_hour_inspected"], 2)
         self.assertEqual(dashboard_response.context["qa_current_hour_passed"], 2)
+
+    def test_admin_dashboard_reflects_qa_entry_totals_and_defects(self):
+        admin_user = get_user_model().objects.create_superuser(username="adminqa", password="pass1234")
+        self.client.force_login(admin_user)
+        defect = DefectMaster.objects.create(
+            defect_code="D-ADMIN",
+            defect_name="Broken Stitch",
+            category=DefectMaster.Category.SEWING,
+            severity=DefectMaster.Severity.MAJOR,
+        )
+        check = HourlyLineCheck.objects.create(
+            factory=self.factory,
+            production_line=self.line,
+            production_order=self.order,
+            article=self.article,
+            check_date=timezone.localdate(),
+            check_hour=9,
+            shift_name="Day Shift",
+            inspected_quantity=100,
+            passed_quantity=82,
+            defective_quantity=18,
+            checker=admin_user,
+            created_by=admin_user,
+        )
+        check.details.create(defect=defect, defect_quantity=18, created_by=admin_user)
+
+        response = self.client.get(reverse("dashboard:admin_dashboard"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["kpi_total_output"], 100)
+        self.assertEqual(response.context["kpi_total_defects"], 18)
+        self.assertEqual(len(response.context["line_output"]), 1)
+        self.assertEqual(response.context["line_output"][0]["actual_output"], 100)
+        self.assertEqual(len(response.context["daily_detail"]), 1)
+        self.assertEqual(response.context["daily_detail"][0]["actual_output"], 100)
+        self.assertEqual(len(response.context["forecast_assignments"]), 1)
+        self.assertContains(response, "Broken Stitch")
+        self.assertContains(response, "Defect Breakdown")
 
     def test_dashboard_shows_shift_totals_and_each_hour_row(self):
         LineAssignment.objects.create(
@@ -355,7 +398,7 @@ class QAPermissionTest(TestCase):
         self.assertContains(response, "Total Pass pcs")
         self.assertContains(response, "Total Inspected pcs")
         self.assertContains(response, "Total Defect pcs")
-        self.assertContains(response, "Show Repaired Defect")
+        self.assertContains(response, "Resolve Pending Defect")
         self.assertContains(response, "Repair")
         self.assertContains(response, 'data-status="REJECT" disabled')
         self.assertNotContains(response, "New Check")

@@ -9,4 +9,5 @@ urlpatterns = [
     path("new/", views.DailyProductionEntryCreateView.as_view(), name="entry_create"),
     path("<int:pk>/edit/", views.DailyProductionEntryUpdateView.as_view(), name="entry_edit"),
     path("<int:pk>/delete/", views.DailyProductionEntryDeleteView.as_view(), name="entry_delete"),
+    path("manpower/", views.LineShiftManpowerView.as_view(), name="manpower"),
 ]

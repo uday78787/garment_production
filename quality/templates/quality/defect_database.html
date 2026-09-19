@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% block title %}Defect Database{% endblock %}
+{% block content %}
+<div class="container-fluid py-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+      <h3 class="mb-1"><i class="fa-solid fa-database"></i> Defect Database</h3>
+      <p class="text-muted mb-0">Search every recorded QA defect by article, date, time, type, hour, line, user, or unique code.</p>
+    </div>
+    <a class="btn btn-success" href="{% url 'quality:export_defect_database_excel' %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}"><i class="fa-solid fa-file-excel"></i> Export Excel</a>
+  </div>
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label">Article</label>
+          <select name="article" class="form-select">
+            <option value="">All articles</option>
+            {% for article in articles %}<option value="{{ article.pk }}" {% if filters.article == article.pk|stringformat:'s' %}selected{% endif %}>{{ article.article_code }} - {{ article.article_name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2"><label class="form-label">Date from</label><input type="date" name="date_from" value="{{ filters.date_from|default:'' }}" class="form-control"></div>
+        <div class="col-md-2"><label class="form-label">Date to</label><input type="date" name="date_to" value="{{ filters.date_to|default:'' }}" class="form-control"></div>
+        <div class="col-md-2"><label class="form-label">Time from</label><input type="time" name="time_from" value="{{ filters.time_from|default:'' }}" class="form-control"></div>
+        <div class="col-md-2"><label class="form-label">Time to</label><input type="time" name="time_to" value="{{ filters.time_to|default:'' }}" class="form-control"></div>
+        <div class="col-md-1"><label class="form-label">Hour</label><input type="number" name="hour" min="1" max="24" value="{{ filters.hour|default:'' }}" class="form-control"></div>
+        <div class="col-md-3">
+          <label class="form-label">Defect type</label>
+          <select name="defect_type" class="form-select"><option value="">All defect types</option>{% for defect in defect_types %}<option value="{{ defect.defect_code }}" {% if filters.defect_type == defect.defect_code %}selected{% endif %}>{{ defect.defect_code }} - {{ defect.defect_name }}</option>{% endfor %}</select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Line</label>
+          <select name="line" class="form-select"><option value="">All lines</option>{% for line in lines %}<option value="{{ line.pk }}" {% if filters.line == line.pk|stringformat:'s' %}selected{% endif %}>{{ line.line_name }}</option>{% endfor %}</select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">User ID</label>
+          <select name="user" class="form-select"><option value="">All users</option>{% for user in users %}<option value="{{ user.pk }}" {% if filters.user == user.pk|stringformat:'s' %}selected{% endif %}>{{ user.username }}</option>{% endfor %}</select>
+        </div>
+        <div class="col-md-2"><label class="form-label">Unique code</label><input type="text" name="tracking_code" maxlength="6" value="{{ filters.tracking_code|default:'' }}" class="form-control" placeholder="6 digits"></div>
+        <div class="col-md-1 d-flex gap-2"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-filter"></i> Filter</button></div>
+        <div class="col-12"><a href="{% url 'quality:defect_database' %}" class="btn btn-outline-secondary btn-sm">Clear filters</a></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="table-responsive">
+      <table class="table table-striped table-hover align-middle mb-0">
+        <thead><tr><th>Unique Code</th><th>Article</th><th>Date</th><th>Time</th><th>Defect Type</th><th>Hour</th><th>Line</th><th>User ID</th><th>Qty</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for record in defect_records %}
+          <tr>
+            <td><code>{{ record.tracking_code }}</code></td>
+            <td>{{ record.hourly_check.article.article_code }}</td>
+            <td>{{ record.hourly_check.check_date }}</td>
+            <td>{{ record.marked_at|date:'H:i:s' }}</td>
+            <td>{{ record.defect.defect_code }} - {{ record.defect.defect_name }}</td>
+            <td>{{ record.hourly_check.check_hour }}</td>
+            <td>{{ record.hourly_check.production_line.line_name }}</td>
+            <td>{{ record.created_by.username|default:'-' }}</td>
+            <td>{{ record.defect_quantity }}</td>
+            <td>{% if record.resolved %}<span class="badge text-bg-success">Resolved</span>{% else %}<span class="badge text-bg-warning">Pending</span>{% endif %}</td>
+          </tr>
+          {% empty %}<tr><td colspan="10" class="text-center text-muted py-4">No defects match the selected filters.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

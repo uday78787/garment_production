@@ -21,6 +21,7 @@ ROLE_GROUP_NAMES = (
     "Supervisor",
     "Dashboard Viewer",
     "QA Permission",
+    "IE Department",
 )
 
 
@@ -48,6 +49,7 @@ def sync_group_with_role(sender, instance, **kwargs):
         UserProfile.Role.DASHBOARD_VIEWER: groups["Dashboard Viewer"],
         UserProfile.Role.SUPERVISOR: groups["Supervisor"],
         UserProfile.Role.QA_PERMISSION: groups["QA Permission"],
+        UserProfile.Role.IE_PERMISSION: groups["IE Department"],
     }.get(instance.role)
     if selected_group:
         user.groups.add(selected_group)

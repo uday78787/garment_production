@@ -10,8 +10,10 @@ from datetime import datetime
 from decimal import Decimal
 
 from django import forms
+from django.utils import timezone
 
 from planning.models import LineAssignment
+from master_data.models import FactoryShift, LineShiftManpower, ProductionLine
 from .models import DailyProductionEntry
 
 
@@ -20,6 +22,13 @@ class DailyProductionEntryForm(forms.ModelForm):
         queryset=LineAssignment.objects.none(),
         label="Article Search / Assignment",
         widget=forms.Select(attrs={"class": "form-select", "data-searchable-assignment": "true"}),
+    )
+    shift = forms.ModelChoiceField(
+        queryset=FactoryShift.objects.none(),
+        required=False,
+        label="Shift (IE manpower)",
+        widget=forms.Select(attrs={"class": "form-select"}),
+        help_text="Select the shift whose IE manpower entry should drive calculations.",
     )
 
     planned_efficiency = forms.DecimalField(
@@ -49,6 +58,7 @@ class DailyProductionEntryForm(forms.ModelForm):
         model = DailyProductionEntry
         fields = [
             "assignment",
+            "shift",
             "production_date",
             "actual_manpower",
             "working_minutes",
@@ -109,6 +119,12 @@ class DailyProductionEntryForm(forms.ModelForm):
             f"{obj.production_order.article.article_code} | {obj.production_order.article.article_name} | "
             f"{obj.production_line} | {obj.production_order.order_number}"
         )
+        shift_queryset = FactoryShift.objects.filter(active=True)
+        if selected_factory:
+            shift_queryset = shift_queryset.filter(factory_id=selected_factory)
+        elif user is not None and not user.is_superuser and hasattr(user, "profile"):
+            shift_queryset = shift_queryset.filter(factory_id=user.profile.factory_id)
+        self.fields["shift"].queryset = shift_queryset.order_by("start_time")
 
     def clean_production_date(self):
         production_date = self.cleaned_data.get("production_date")
@@ -128,6 +144,17 @@ class DailyProductionEntryForm(forms.ModelForm):
         if value is None:
             return value
         assignment = self.cleaned_data.get("assignment") or getattr(self.instance, "assignment", None)
+        shift = self.cleaned_data.get("shift") or getattr(self.instance, "shift", None)
+        production_date = self.cleaned_data.get("production_date") or getattr(self.instance, "production_date", None)
+        if assignment and shift and production_date:
+            ie_entry = LineShiftManpower.objects.filter(
+                production_line=assignment.production_line,
+                shift=shift,
+                entry_date=production_date,
+            ).first()
+            if ie_entry is None:
+                raise forms.ValidationError("IE must enter manpower for this line, shift, and date first.")
+            return ie_entry.manpower
         if assignment and value > assignment.production_line.capacity_manpower:
             raise forms.ValidationError(
                 "Actual manpower exceeds the line's capacity manpower."
@@ -141,6 +168,17 @@ class DailyProductionEntryForm(forms.ModelForm):
     def clean_working_minutes(self):
         value = self.cleaned_data.get("working_minutes")
         assignment = self.cleaned_data.get("assignment") or getattr(self.instance, "assignment", None)
+        shift = self.cleaned_data.get("shift") or getattr(self.instance, "shift", None)
+        production_date = self.cleaned_data.get("production_date") or getattr(self.instance, "production_date", None)
+        if assignment and shift and production_date:
+            ie_entry = LineShiftManpower.objects.filter(
+                production_line=assignment.production_line,
+                shift=shift,
+                entry_date=production_date,
+            ).first()
+            if ie_entry is None:
+                raise forms.ValidationError("IE must enter manpower for this line, shift, and date first.")
+            return ie_entry.working_minutes
         if value is None:
             return assignment.working_minutes_per_operator if assignment else 480
         if assignment and value > assignment.working_minutes_per_operator:
@@ -193,3 +231,43 @@ class DailyProductionEntryForm(forms.ModelForm):
             )
 
         return value
+
+
+class LineShiftManpowerForm(forms.ModelForm):
+    class Meta:
+        model = LineShiftManpower
+        fields = ["production_line", "shift", "entry_date", "manpower"]
+        widgets = {
+            "production_line": forms.Select(attrs={"class": "form-select"}),
+            "shift": forms.Select(attrs={"class": "form-select"}),
+            "entry_date": forms.DateInput(attrs={"type": "date", "class": "form-control"}),
+            "manpower": forms.NumberInput(attrs={"class": "form-control", "min": 0}),
+        }
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        profile = getattr(user, "profile", None)
+        if user is not None and user.is_superuser:
+            lines = ProductionLine.objects.filter(factory__active_status=True)
+            shifts = FactoryShift.objects.filter(active=True, factory__active_status=True)
+        elif profile and profile.can_manage_manpower:
+            lines = profile.assigned_lines.filter(factory=profile.factory, factory__active_status=True)
+            shifts = FactoryShift.objects.filter(factory=profile.factory, active=True)
+        else:
+            lines = ProductionLine.objects.none()
+            shifts = FactoryShift.objects.none()
+        self.fields["production_line"].queryset = lines.order_by("line_name")
+        self.fields["shift"].queryset = shifts.order_by("start_time")
+        if not self.instance.pk:
+            self.fields["entry_date"].initial = timezone.localdate()
+
+    def clean(self):
+        cleaned = super().clean()
+        line = cleaned.get("production_line")
+        shift = cleaned.get("shift")
+        manpower = cleaned.get("manpower")
+        if line and shift and line.factory_id != shift.factory_id:
+            raise forms.ValidationError("Select a shift belonging to the selected line's factory.")
+        if line and manpower is not None and manpower > line.capacity_manpower:
+            self.add_error("manpower", "Manpower cannot exceed this line's capacity.")
+        return cleaned

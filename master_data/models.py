@@ -61,6 +61,11 @@ class FactoryShift(TimeStampedModel):
         validators=[MinValueValidator(0), MaxValueValidator(8)],
         help_text="Additional overtime hours for this shift.",
     )
+    shift_minutes = models.PositiveSmallIntegerField(
+        default=480,
+        validators=[MinValueValidator(1), MaxValueValidator(1440)],
+        help_text="Planned working minutes for this shift.",
+    )
     overtime_start_time = models.TimeField(
         null=True,
         blank=True,
@@ -201,7 +206,7 @@ class FactoryShift(TimeStampedModel):
     def default_factory_presets(cls, factory, assigned_by=None):
         presets = [
             (cls.PresetShift.DAY, "Day Shift", "08:00:00", "16:00:00"),
-            (cls.PresetShift.OVER_TIME, "Over Time", "16:00:00", "20:00:00"),
+            (cls.PresetShift.OVER_TIME, "OT Shift", "16:00:00", "19:00:00"),
             (cls.PresetShift.NIGHT, "Night Shift", "20:00:00", "08:00:00"),
         ]
         created = []
@@ -213,6 +218,8 @@ class FactoryShift(TimeStampedModel):
                     "shift_name": shift_name,
                     "start_time": start_time,
                     "end_time": end_time,
+                    "shift_minutes": {cls.PresetShift.DAY: 480, cls.PresetShift.OVER_TIME: 180, cls.PresetShift.NIGHT: 480}[preset_code],
+                    "standard_hours": {cls.PresetShift.DAY: 8, cls.PresetShift.OVER_TIME: 3, cls.PresetShift.NIGHT: 8}[preset_code],
                     "description": f"Factory preset: {shift_name}",
                     "active": True,
                     "assigned_by": assigned_by,
@@ -221,6 +228,39 @@ class FactoryShift(TimeStampedModel):
             if made:
                 created.append(obj)
         return created
+
+
+class LineShiftManpower(TimeStampedModel):
+    factory = models.ForeignKey(Factory, on_delete=models.PROTECT, related_name="line_shift_manpower")
+    production_line = models.ForeignKey("ProductionLine", on_delete=models.PROTECT, related_name="shift_manpower")
+    shift = models.ForeignKey(FactoryShift, on_delete=models.PROTECT, related_name="manpower_entries")
+    entry_date = models.DateField(default=timezone.localdate)
+    manpower = models.PositiveIntegerField(validators=[MinValueValidator(0)])
+    working_minutes = models.PositiveIntegerField(validators=[MinValueValidator(1)], editable=False)
+    entered_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="manpower_entries_entered")
+
+    class Meta:
+        ordering = ["-entry_date", "production_line__line_name", "shift__start_time"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["production_line", "shift", "entry_date"],
+                name="unique_line_shift_manpower_date",
+            )
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.shift_id and self.production_line_id and self.shift.factory_id != self.production_line.factory_id:
+            raise ValidationError("The shift and production line must belong to the same factory.")
+        if self.factory_id and self.production_line_id and self.factory_id != self.production_line.factory_id:
+            raise ValidationError("The factory must match the production line factory.")
+
+    def save(self, *args, **kwargs):
+        self.factory_id = self.production_line.factory_id
+        self.working_minutes = self.shift.shift_minutes
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
 
 class ProductionLineShiftAssignment(TimeStampedModel):

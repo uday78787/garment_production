@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from common.admin import FactoryScopedAdminMixin
-from .models import Article, Factory, FactoryShift, ProductionLine, ProductionLineShiftAssignment
+from .models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLine, ProductionLineShiftAssignment
 
 
 @admin.register(Factory)
@@ -31,6 +31,7 @@ class FactoryShiftAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
         "preset_code",
         "start_time",
         "end_time",
+        "shift_minutes",
         "standard_hours",
         "overtime_hours",
         "overtime_start_time",
@@ -45,7 +46,7 @@ class FactoryShiftAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
             "fields": ("factory", "shift_name", "preset_code", "start_time", "end_time", "active")
         }),
         ("Shift Duration", {
-            "fields": ("standard_hours", "overtime_hours", "overtime_start_time"),
+            "fields": ("standard_hours", "overtime_hours", "shift_minutes", "overtime_start_time"),
             "description": "Set the normal shift length from 1 to 8 hours, and optional overtime beyond the main shift.",
         }),
         ("Details", {"fields": ("description", "assigned_by")}),
@@ -62,6 +63,14 @@ class ProductionLineShiftAssignmentAdmin(FactoryScopedAdminMixin, admin.ModelAdm
     list_display = ("assignment_date", "factory", "production_line", "shift", "active", "assigned_by")
     list_filter = ("factory", "assignment_date", "active")
     search_fields = ("production_line__line_name", "shift__shift_name")
+
+
+@admin.register(LineShiftManpower)
+class LineShiftManpowerAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
+    list_display = ("entry_date", "factory", "production_line", "shift", "manpower", "working_minutes", "entered_by")
+    list_filter = ("factory", "entry_date", "shift")
+    search_fields = ("production_line__line_name", "shift__shift_name", "entered_by__username")
+    readonly_fields = ("factory", "working_minutes", "entered_by")
 
 
 @admin.register(ProductionLine)

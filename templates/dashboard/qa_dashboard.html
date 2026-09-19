@@ -38,11 +38,37 @@
 
   <div class="card shadow-sm border-0 mb-4">
     <div class="card-body">
+      <form method="get" class="row g-2 align-items-end" data-selected-article="{{ selected_article.pk|default:'' }}">
+        <div class="col-md-9">
+          <label for="qa-article" class="form-label fw-semibold">Running Style / Article</label>
+          <select id="qa-article" name="article" class="form-select" {% if not running_articles %}disabled{% endif %}>
+            <option value="">Select the running article being checked</option>
+            {% for article in running_articles %}
+              <option value="{{ article.pk }}" {% if selected_article and selected_article.pk == article.pk %}selected{% endif %}>
+                {{ article.article_code }} - {{ article.article_name }}
+              </option>
+            {% empty %}
+              <option value="">No running articles available</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <button type="submit" class="btn btn-primary w-100" {% if not running_articles %}disabled{% endif %}>
+            <i class="fa-solid fa-magnifying-glass"></i> Search
+          </button>
+        </div>
+      </form>
+      <div class="form-text mt-2">Select a running factory article and press Search before recording QA data.</div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm border-0 mb-4">
+    <div class="card-body">
       <div class="d-flex flex-wrap gap-3 justify-content-center justify-content-md-start">
-        <button type="button" class="btn btn-success btn-lg px-5 py-3 flex-fill flex-md-grow-0 action-btn" data-status="PASS">PASS</button>
-        <button type="button" class="btn btn-warning btn-lg px-5 py-3 text-dark flex-fill flex-md-grow-0 action-btn" data-status="ALTER" data-bs-toggle="modal" data-bs-target="#alterDefectModal">ALTER</button>
+        <button type="button" class="btn btn-success btn-lg px-5 py-3 flex-fill flex-md-grow-0 action-btn" data-status="PASS" {% if not selected_article %}disabled{% endif %}>PASS</button>
+        <button type="button" class="btn btn-warning btn-lg px-5 py-3 text-dark flex-fill flex-md-grow-0 action-btn" data-status="ALTER" data-bs-toggle="modal" data-bs-target="#alterDefectModal" {% if not selected_article %}disabled{% endif %}>ALTER</button>
         <button type="button" class="btn btn-danger btn-lg px-5 py-3 flex-fill flex-md-grow-0 action-btn" data-status="REJECT" disabled>REJECT</button>
-        <button type="button" class="btn btn-outline-secondary btn-lg px-4 py-3 flex-fill flex-md-grow-0" data-bs-toggle="modal" data-bs-target="#repairedDefectModal">Show Repaired Defect</button>
+        <button type="button" class="btn btn-outline-secondary btn-lg px-4 py-3 flex-fill flex-md-grow-0" data-bs-toggle="modal" data-bs-target="#repairedDefectModal">Resolve Pending Defect</button>
       </div>
     </div>
   </div>
@@ -123,7 +149,7 @@
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="repairedDefectModalLabel">Repaired defect</h5>
+        <h5 class="modal-title" id="repairedDefectModalLabel">Resolve Pending Defect</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
@@ -158,6 +184,9 @@
     .find((cookie) => cookie.startsWith('csrftoken='))
     ?.split('=')[1] || '';
   const qaLineId = {{ assigned_lines.0.pk|default:'null' }};
+  const qaArticleSelect = document.getElementById('qa-article');
+  const articleSearchForm = qaArticleSelect?.form;
+  let qaArticleId = qaArticleSelect?.value || articleSearchForm?.dataset.selectedArticle || null;
   const repairQueue = JSON.parse(document.getElementById('repair-queue-data')?.textContent || '[]');
 
   let passCount = Number(passTotal?.textContent.trim() || 0);
@@ -252,9 +281,12 @@
           window.alert(data.error || 'The defect could not be repaired.');
           return;
         }
-            const repairedQuantity = Number(data.repaired_quantity || 0);
-            passCount += repairedQuantity;
-            reportPassCount += repairedQuantity;
+            passCount = Number(data.shift_totals?.passed ?? passCount);
+            inspectedCount = Number(data.shift_totals?.inspected ?? inspectedCount);
+            defectCount = Number(data.shift_totals?.defects ?? Math.max(defectCount - Number(data.repaired_quantity || 0), 0));
+            reportPassCount = Number(data.current_hour_totals?.passed ?? (reportPassCount + Number(data.repaired_quantity || 0)));
+            reportInspectedCount = Number(data.current_hour_totals?.inspected ?? reportInspectedCount);
+            reportAlterCount = Number(data.current_hour_totals?.defects ?? Math.max(reportAlterCount - Number(data.repaired_quantity || 0), 0));
         defectEntries = defectEntries.filter((item) => String(item.id) !== String(id));
         refreshCounters();
         renderMarkedDefects();
@@ -271,8 +303,8 @@
       const status = button.dataset.status;
 
       if (status === 'PASS') {
-        if (!qaLineId) {
-          window.alert('No assigned production line is available for this checker.');
+        if (!qaLineId || !qaArticleId) {
+          window.alert('Select a running article before recording QA data.');
           return;
         }
         button.disabled = true;
@@ -283,7 +315,7 @@
             'X-CSRFToken': csrfToken,
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
           },
-          body: new URLSearchParams({line_id: qaLineId}),
+          body: new URLSearchParams({line_id: qaLineId, article_id: qaArticleId}),
         })
           .then((response) => response.json().then((data) => ({ok: response.ok, data})))
           .then(({ok, data}) => {
@@ -321,8 +353,8 @@
       return;
     }
 
-    if (!qaLineId) {
-      window.alert('No assigned production line is available for this checker.');
+    if (!qaLineId || !qaArticleId) {
+      window.alert('Select a running article before recording QA data.');
       return;
     }
 
@@ -330,7 +362,7 @@
     fetch('{% url "dashboard:qa_mark_defect" %}', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
-      body: JSON.stringify({line_id: qaLineId, defect_code: code, quantity: qty}),
+      body: JSON.stringify({line_id: qaLineId, article_id: qaArticleId, defect_code: code, quantity: qty}),
     })
       .then((response) => response.json().then((data) => ({ok: response.ok, data})))
       .then(({ok, data}) => {
@@ -371,5 +403,6 @@
 
   refreshCounters();
   renderMarkedDefects();
+
 </script>
 {% endblock %}

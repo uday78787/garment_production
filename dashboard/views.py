@@ -27,9 +27,10 @@ from django.utils import timezone
 from django.views.generic import TemplateView
 
 from accounts.mixins import AdminRequiredMixin, admin_required
-from master_data.models import Article, Factory, FactoryShift, ProductionLineShiftAssignment
-from planning.models import LineAssignment
+from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLineShiftAssignment
+from planning.models import LineAssignment, ProductionOrder
 from planning.services.calculations import forecast_daily_output
+from planning.services import calculations as calc
 from production.models import DailyProductionEntry
 from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail
 
@@ -183,6 +184,181 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             self.request.session["selected_factory_id"] = factory_id
         return factory_id
 
+    def get_qa_summary(self, selected_factory_id=None, date_from=None, date_to=None):
+        qs = HourlyLineCheck.objects.select_related("factory", "production_line", "article")
+        if selected_factory_id:
+            qs = qs.filter(factory_id=selected_factory_id)
+        if date_from:
+            qs = qs.filter(check_date__gte=date_from)
+        if date_to:
+            qs = qs.filter(check_date__lte=date_to)
+
+        total_inspected = qs.aggregate(total=Sum("inspected_quantity"))["total"] or 0
+        total_passed = qs.aggregate(total=Sum("passed_quantity"))["total"] or 0
+        total_defects = HourlyLineCheckDetail.objects.filter(
+            hourly_check__in=qs
+        ).aggregate(total=Sum("defect_quantity"))["total"] or 0
+        defect_breakdown = (
+            HourlyLineCheckDetail.objects.filter(hourly_check__in=qs)
+            .values("defect__defect_code", "defect__defect_name")
+            .annotate(total_defects=Sum("defect_quantity"))
+            .order_by("-total_defects", "defect__defect_code")
+        )
+        daily = (
+            qs.values("check_date")
+            .annotate(
+                total_inspected=Sum("inspected_quantity"),
+                total_passed=Sum("passed_quantity"),
+            )
+            .order_by("check_date")
+        )
+        marked_defects_by_date = {
+            row["hourly_check__check_date"]: row["total"] or 0
+            for row in HourlyLineCheckDetail.objects.filter(
+                hourly_check__in=qs
+            ).values("hourly_check__check_date").annotate(total=Sum("defect_quantity"))
+        }
+        daily = [
+            {**row, "total_defects": marked_defects_by_date.get(row["check_date"], 0)}
+            for row in daily
+        ]
+        return {
+            "total_inspected": int(total_inspected),
+            "total_passed": int(total_passed),
+            "total_defects": int(total_defects),
+            "defect_breakdown": list(defect_breakdown),
+            "daily": list(daily),
+        }
+
+    def get_qa_reporting_data(self, selected_factory_id=None, date_from=None, date_to=None, selected_style_id=None):
+        checks = HourlyLineCheck.objects.filter(
+            factory_id=selected_factory_id,
+            check_date__gte=date_from or timezone.localdate() - timedelta(days=self.days_back),
+        ).select_related("production_line", "production_order__article", "article")
+        if date_to:
+            checks = checks.filter(check_date__lte=date_to)
+        if selected_style_id and selected_style_id.isdigit():
+            checks = checks.filter(article_id=selected_style_id)
+
+        line_rows = {}
+        daily_rows = {}
+        forecast_rows = {}
+        shifts = {
+            shift.shift_name: shift
+            for shift in FactoryShift.objects.filter(factory_id=selected_factory_id, active=True)
+        }
+        manpower_rows = LineShiftManpower.objects.filter(
+            factory_id=selected_factory_id,
+            entry_date__gte=date_from or timezone.localdate() - timedelta(days=self.days_back),
+        ).select_related("shift")
+        if date_to:
+            manpower_rows = manpower_rows.filter(entry_date__lte=date_to)
+        manpower_lookup = {
+            (row.production_line_id, row.entry_date, row.shift.shift_name): row
+            for row in manpower_rows
+        }
+
+        for check in checks:
+            assignment = LineAssignment.objects.filter(
+                production_line=check.production_line,
+                production_order=check.production_order,
+            ).first() or LineAssignment.objects.filter(
+                production_order=check.production_order,
+            ).first()
+            shift = shifts.get(check.shift_name)
+            manpower = manpower_lookup.get((check.production_line_id, check.check_date, check.shift_name))
+            working_minutes = manpower.working_minutes if manpower else (shift.shift_minutes if shift else 0)
+            actual_output = Decimal(check.inspected_quantity or 0)
+            produced_minutes = actual_output * check.article.sam
+            if assignment:
+                day_number = max((check.check_date - assignment.start_date).days + 1, 1)
+                planned_efficiency = calc.planned_efficiency(
+                    assignment.start_efficiency,
+                    assignment.daily_efficiency_growth,
+                    day_number,
+                    assignment.max_efficiency,
+                )
+                available_minutes = Decimal(manpower.manpower if manpower else 0) * Decimal(working_minutes)
+                target_output = calc.target_output(
+                    calc.planned_productive_minutes(available_minutes, planned_efficiency),
+                    check.article.sam,
+                ) if available_minutes else Decimal("0")
+            else:
+                planned_efficiency = Decimal("0")
+                available_minutes = Decimal(manpower.manpower if manpower else 0) * Decimal(working_minutes)
+                target_output = Decimal("0")
+
+            line_key = check.production_line_id
+            line_row = line_rows.setdefault(line_key, {
+                "assignment__production_line__line_name": check.production_line.line_name,
+                "planned_output": Decimal("0"),
+                "actual_output": Decimal("0"),
+            })
+            line_row["planned_output"] += target_output
+            line_row["actual_output"] += actual_output
+
+            daily_key = (check.check_date, check.production_line_id, check.article_id)
+            daily_row = daily_rows.setdefault(daily_key, {
+                "date": check.check_date,
+                "line": check.production_line.line_name,
+                "article": check.article.article_code,
+                "manpower": 0,
+                "available_minutes": Decimal("0"),
+                "produced_minutes": Decimal("0"),
+                "planned_efficiency_total": Decimal("0"),
+                "actual_output": Decimal("0"),
+                "target_output": Decimal("0"),
+                "count": 0,
+                "defect_pieces": 0,
+            })
+            daily_row["manpower"] += manpower.manpower if manpower else 0
+            daily_row["available_minutes"] += available_minutes
+            daily_row["produced_minutes"] += produced_minutes
+            daily_row["planned_efficiency_total"] += planned_efficiency
+            daily_row["actual_output"] += actual_output
+            daily_row["target_output"] += target_output
+            daily_row["count"] += 1
+            daily_row["defect_pieces"] += check.details.aggregate(
+                total=Sum("defect_quantity")
+            )["total"] or 0
+
+            forecast_key = (check.production_line_id, check.production_order_id, check.article_id)
+            forecast_row = forecast_rows.setdefault(forecast_key, {
+                "line_name": check.production_line.line_name,
+                "order_number": check.production_order.order_number,
+                "article_code": check.article.article_code,
+                "planned_output": Decimal("0"),
+                "actual_output": Decimal("0"),
+                "forecast_daily_output": Decimal("0"),
+                "expected_days_remaining": None,
+            })
+            forecast_row["planned_output"] += target_output
+            forecast_row["actual_output"] += actual_output
+
+        for row in line_rows.values():
+            row["variance"] = row["actual_output"] - row["planned_output"]
+        detail_rows = []
+        for row in daily_rows.values():
+            available = row["available_minutes"]
+            detail_rows.append({
+                "date": row["date"],
+                "line": row["line"],
+                "article": row["article"],
+                "manpower": row["manpower"],
+                "available_minutes": available,
+                "produced_minutes": row["produced_minutes"],
+                "planned_efficiency": row["planned_efficiency_total"] / row["count"] * 100 if row["count"] else Decimal("0"),
+                "actual_efficiency": row["produced_minutes"] / available * 100 if available else Decimal("0"),
+                "daily_efficiency": row["produced_minutes"] / available * 100 if available else Decimal("0"),
+                "target_output": row["target_output"],
+                "actual_output": row["actual_output"],
+                "defect_pieces": row["defect_pieces"],
+                "dhu": row["defect_pieces"] / row["actual_output"] * 100 if row["actual_output"] else Decimal("0"),
+                "difference": row["actual_output"] - row["target_output"],
+                "gain_loss_minutes": row["produced_minutes"] - (available * row["planned_efficiency_total"] / row["count"] if row["count"] else 0),
+            })
+        return list(line_rows.values()), detail_rows, list(forecast_rows.values())
+
     def get_filtered_entries(self):
         entries = self.get_scoped_entries()
 
@@ -205,6 +381,8 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         entries = self.get_filtered_entries()
         selected_factory_id = self.get_auto_selected_factory_id()
+        date_from = self.request.GET.get("date_from")
+        date_to = self.request.GET.get("date_to")
         current_factory = Factory.objects.filter(pk=selected_factory_id).first() if selected_factory_id else None
         current_shift = FactoryShift.get_active_shift_for_factory(current_factory) if current_factory else None
         context["current_factory_name"] = current_factory.name if current_factory else "No factory selected"
@@ -214,34 +392,80 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
         if selected_style_id and selected_style_id.isdigit():
             entries = entries.filter(assignment__production_order__article_id=selected_style_id)
         entries = entries.order_by("production_date")
-        context["selected_date_from"] = self.request.GET.get("date_from") or ""
-        context["selected_date_to"] = self.request.GET.get("date_to") or ""
+        context["selected_date_from"] = date_from or ""
+        context["selected_date_to"] = date_to or ""
         context["daily_detail_export_query"] = self.request.GET.urlencode()
 
-        daily = (
-            entries.values("production_date")
-            .annotate(
-                total_output=Sum("actual_output"),
-                avg_efficiency=Avg("actual_efficiency"),
-                total_gain_loss=Sum("gain_loss_minutes"),
+        qa_summary = self.get_qa_summary(selected_factory_id=selected_factory_id, date_from=date_from, date_to=date_to)
+        qa_daily = qa_summary["daily"]
+        if qa_daily:
+            _, qa_daily_detail, _ = self.get_qa_reporting_data(
+                selected_factory_id=selected_factory_id,
+                date_from=date_from,
+                date_to=date_to,
+                selected_style_id=selected_style_id,
             )
-            .order_by("production_date")
-        )
+            daily_efficiency_data = {}
+            for row in qa_daily_detail:
+                daily = daily_efficiency_data.setdefault(row["date"], {
+                    "actual_output": Decimal("0"),
+                    "produced_minutes": Decimal("0"),
+                    "available_minutes": Decimal("0"),
+                })
+                daily["actual_output"] += row["actual_output"]
+                daily["produced_minutes"] += row["produced_minutes"]
+                daily["available_minutes"] += row["available_minutes"]
+            dates = sorted(daily_efficiency_data)
+            labels = [day.strftime("%d-%b") for day in dates]
+            output_series = [float(daily_efficiency_data[day]["actual_output"]) for day in dates]
+            efficiency_series = [
+                round(float(data["produced_minutes"] / data["available_minutes"] * 100), 2)
+                if data["available_minutes"] else 0
+                for data in (daily_efficiency_data[day] for day in dates)
+            ]
+            total_output = sum(output_series)
+            total_defects = qa_summary["total_defects"]
+            dhu = (total_defects / total_output * 100) if total_output else 0
+            context["chart_labels"] = json.dumps(labels)
+            context["chart_output_series"] = json.dumps(output_series)
+            context["chart_efficiency_series"] = json.dumps(efficiency_series)
+            context["kpi_total_output"] = total_output
+            context["kpi_total_defects"] = total_defects
+            context["kpi_dhu"] = round(dhu, 2)
+            total_produced_minutes = sum(data["produced_minutes"] for data in daily_efficiency_data.values())
+            total_available_minutes = sum(data["available_minutes"] for data in daily_efficiency_data.values())
+            context["kpi_avg_efficiency"] = round(
+                float(total_produced_minutes / total_available_minutes * 100), 2
+            ) if total_available_minutes else 0
+            context["qa_defect_breakdown"] = qa_summary["defect_breakdown"]
+            context["quality_source"] = "QA"
+        else:
+            daily = (
+                entries.values("production_date")
+                .annotate(
+                    total_output=Sum("actual_output"),
+                    avg_efficiency=Avg("actual_efficiency"),
+                    total_gain_loss=Sum("gain_loss_minutes"),
+                )
+                .order_by("production_date")
+            )
 
-        labels = [row["production_date"].strftime("%d-%b") for row in daily]
-        output_series = [float(row["total_output"] or 0) for row in daily]
-        efficiency_series = [round(float(row["avg_efficiency"] or 0) * 100, 2) for row in daily]
+            labels = [row["production_date"].strftime("%d-%b") for row in daily]
+            output_series = [float(row["total_output"] or 0) for row in daily]
+            efficiency_series = [round(float(row["avg_efficiency"] or 0) * 100, 2) for row in daily]
 
-        context["chart_labels"] = json.dumps(labels)
-        context["chart_output_series"] = json.dumps(output_series)
-        context["chart_efficiency_series"] = json.dumps(efficiency_series)
-        total_output = sum(output_series)
-        total_defects = sum(float(row["defect_pieces"] or 0) for row in entries.values("defect_pieces"))
-        dhu = (total_defects / total_output * 100) if total_output else 0
-        context["kpi_total_output"] = total_output
-        context["kpi_total_defects"] = total_defects
-        context["kpi_dhu"] = round(dhu, 2)
-        context["kpi_avg_efficiency"] = round(sum(efficiency_series) / len(efficiency_series), 2) if efficiency_series else 0
+            context["chart_labels"] = json.dumps(labels)
+            context["chart_output_series"] = json.dumps(output_series)
+            context["chart_efficiency_series"] = json.dumps(efficiency_series)
+            total_output = sum(output_series)
+            total_defects = sum(float(row["defect_pieces"] or 0) for row in entries.values("defect_pieces"))
+            dhu = (total_defects / total_output * 100) if total_output else 0
+            context["kpi_total_output"] = total_output
+            context["kpi_total_defects"] = total_defects
+            context["kpi_dhu"] = round(dhu, 2)
+            context["kpi_avg_efficiency"] = round(sum(efficiency_series) / len(efficiency_series), 2) if efficiency_series else 0
+            context["qa_defect_breakdown"] = []
+            context["quality_source"] = "Production"
 
         style_ids = self.get_filtered_entries().values_list(
             "assignment__production_order__article_id", flat=True
@@ -271,6 +495,7 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             target_output=Sum("target_output"),
             actual_output=Sum("actual_output"),
             manpower=Sum("actual_manpower"),
+            defect_pieces=Sum("defect_pieces"),
             average_efficiency=Avg("actual_efficiency"),
             average_planned_efficiency=Avg("planned_efficiency"),
             gain_loss_minutes=Sum("gain_loss_minutes"),
@@ -300,6 +525,8 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                 "daily_efficiency": daily_efficiency,
                 "target_output": target_output,
                 "actual_output": actual_output,
+                "defect_pieces": row["defect_pieces"] or 0,
+                "dhu": (Decimal(row["defect_pieces"] or 0) / actual_output * 100) if actual_output else Decimal("0"),
                 "difference": actual_output - target_output,
                 "gain_loss_minutes": row["gain_loss_minutes"] or 0,
                 "gain_loss_efficiency": daily_efficiency - planned_efficiency,
@@ -356,6 +583,27 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
         context["forecast_total"] = forecast_total
         context["forecast_days_to_complete"] = max(forecast_days_values) if forecast_days_values else None
         context["forecast_assignments"] = forecast_rows
+
+        # QA is the live output source when IE has supplied manpower but no
+        # manual DailyProductionEntry exists yet.
+        if not entries.exists():
+            qa_line_output, qa_daily_detail, qa_forecast = self.get_qa_reporting_data(
+                selected_factory_id=selected_factory_id,
+                date_from=date_from,
+                date_to=date_to,
+                selected_style_id=selected_style_id,
+            )
+            if qa_line_output or qa_daily_detail:
+                context["line_output"] = qa_line_output
+                context["daily_detail"] = qa_daily_detail
+                context["forecast_assignments"] = qa_forecast
+                context["styles"] = Article.objects.filter(
+                    hourly_line_checks__factory_id=selected_factory_id,
+                    hourly_line_checks__check_date__gte=date_from or timezone.localdate() - timedelta(days=self.days_back),
+                ).distinct().order_by("article_code")
+                context["selected_style"] = context["styles"].filter(
+                    pk=context["selected_style_id"]
+                ).first() if context["selected_style_id"] else None
         return context
 
 
@@ -363,7 +611,17 @@ class AdminDashboardView(AdminRequiredMixin, BaseDashboardView):
     template_name = "dashboard/admin_dashboard.html"
 
     def get_scoped_entries(self):
-        return DailyProductionEntry.objects.all()
+        user = self.request.user
+        if user.is_superuser:
+            return DailyProductionEntry.objects.all()
+        profile = getattr(user, "profile", None)
+        if profile is None:
+            return DailyProductionEntry.objects.none()
+        if profile.is_admin:
+            return DailyProductionEntry.objects.filter(
+                assignment__production_line__factory__in=profile.accessible_factories.all()
+            )
+        return DailyProductionEntry.objects.none()
 
 
 class UserDashboardView(BaseDashboardView):
@@ -377,14 +635,19 @@ class UserDashboardView(BaseDashboardView):
 
     def get_scoped_entries(self):
         user = self.request.user
-        if hasattr(user, "profile") and not user.profile.is_admin:
-            entries = DailyProductionEntry.objects.filter(
-                assignment__production_line__in=user.profile.assigned_lines.all()
+        profile = getattr(user, "profile", None)
+        if profile and profile.is_admin:
+            return DailyProductionEntry.objects.filter(
+                assignment__production_line__factory__in=profile.accessible_factories.all()
             )
-            if user.profile.factory_id:
-                entries = entries.filter(assignment__production_line__factory_id=user.profile.factory_id)
+        if profile and not profile.is_admin:
+            entries = DailyProductionEntry.objects.filter(
+                assignment__production_line__in=profile.assigned_lines.all()
+            )
+            if profile.factory_id:
+                entries = entries.filter(assignment__production_line__factory_id=profile.factory_id)
             return entries
-        return DailyProductionEntry.objects.all()
+        return DailyProductionEntry.objects.none()
 
 
 class QADashboardView(LoginRequiredMixin, TemplateView):
@@ -408,6 +671,16 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
         context["qa_user"] = user.get_full_name() or user.get_username()
 
         factory = profile.factory if profile else None
+        running_articles = Article.objects.filter(
+            orders__status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
+            orders__assignments__production_line__factory=factory,
+        ).distinct().order_by("article_code") if factory else Article.objects.none()
+        selected_article_id = self.request.GET.get("article") or self.request.session.get("qa_article_id")
+        selected_article = running_articles.filter(pk=selected_article_id).first() if selected_article_id else None
+        if selected_article:
+            self.request.session["qa_article_id"] = selected_article.pk
+        context["running_articles"] = running_articles
+        context["selected_article"] = selected_article
         current_shift = FactoryShift.get_active_shift_for_factory(factory) if factory else None
         context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
         schedule_status = current_shift.current_schedule_status() if current_shift else None
@@ -423,15 +696,14 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
             check_hour=current_hour_number,
             shift_name=current_shift.shift_name if current_shift else "",
         )
-        context["qa_current_hour_inspected"] = sum(check.inspected_quantity for check in current_hour_checks)
-        context["qa_current_hour_passed"] = sum(check.passed_quantity for check in current_hour_checks)
-        context["qa_current_hour_alter"] = sum(
-            detail.defect_quantity
-            for detail in HourlyLineCheckDetail.objects.filter(hourly_check__in=current_hour_checks)
-        )
-        context["qa_shift_inspected"] = sum(check.inspected_quantity for check in dashboard_checks)
-        context["qa_shift_passed"] = sum(check.passed_quantity for check in dashboard_checks)
-        context["qa_shift_defects"] = sum(check.defective_quantity for check in dashboard_checks)
+        current_inspected, current_passed, current_defects = _effective_qa_totals(current_hour_checks)
+        shift_inspected, shift_passed, shift_defects = _effective_qa_totals(dashboard_checks)
+        context["qa_current_hour_inspected"] = current_inspected
+        context["qa_current_hour_passed"] = current_passed
+        context["qa_current_hour_alter"] = current_defects
+        context["qa_shift_inspected"] = shift_inspected
+        context["qa_shift_passed"] = shift_passed
+        context["qa_shift_defects"] = shift_defects
         hourly_report = []
         summary_keys = set(dashboard_checks.values_list("check_date", "shift_name", "check_hour", "production_line_id"))
         for check_date, shift_name, check_hour, line_id in sorted(summary_keys, key=lambda item: (item[0], item[1], item[2], item[3])):
@@ -441,18 +713,16 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
                 check_hour=check_hour,
                 production_line_id=line_id,
             )
-            summary_defects = HourlyLineCheckDetail.objects.filter(
-                hourly_check__in=summary_checks
-            ).aggregate(total=Sum("defect_quantity"))["total"] or 0
+            summary_inspected, summary_passed, summary_defects = _effective_qa_totals(summary_checks)
             hourly_report.append({
                 "date": check_date.isoformat(),
                 "shift": shift_name or "Legacy shift",
                 "hour": check_hour,
                 "line": summary_checks.first().production_line.line_name,
-                "passed": sum(check.passed_quantity for check in summary_checks),
+                "passed": summary_passed,
                 "alter": summary_defects,
                 "reject": 0,
-                "inspected": sum(check.inspected_quantity for check in summary_checks),
+                "inspected": summary_inspected,
                 "current": check_date == timezone.localdate() and shift_name == (current_shift.shift_name if current_shift else "") and check_hour == current_hour_number,
             })
         context["hourly_report"] = hourly_report
@@ -500,6 +770,30 @@ def _qa_profile(request):
     return profile
 
 
+def _effective_qa_totals(checks):
+    """Reconcile repaired defect details with legacy hourly check totals."""
+    inspected = passed = defects = 0
+    for check in checks:
+        detail_totals = check.details.aggregate(
+            defects=Sum("defect_quantity"),
+            repaired=Sum("repaired_quantity"),
+        )
+        recorded_defects = detail_totals["defects"] or 0
+        repaired = detail_totals["repaired"] or 0
+        if recorded_defects:
+            unresolved = max(recorded_defects - repaired, 0)
+            stale_repaired = max(check.defective_quantity - unresolved, 0)
+        else:
+            unresolved = check.defective_quantity
+            stale_repaired = 0
+        effective_passed = check.passed_quantity + stale_repaired
+        effective_inspected = max(check.inspected_quantity, effective_passed + unresolved)
+        inspected += effective_inspected
+        passed += effective_passed
+        defects += unresolved
+    return inspected, passed, defects
+
+
 @require_GET
 def qa_dashboard_data(request):
     profile = _qa_profile(request)
@@ -540,8 +834,9 @@ def qa_mark_defect(request):
         payload = json.loads(request.body or "{}")
         line_id = int(payload.get("line_id"))
         quantity = int(payload.get("quantity"))
+        article_id = int(payload.get("article_id")) if payload.get("article_id") else None
     except (TypeError, ValueError, json.JSONDecodeError):
-        return JsonResponse({"error": "Line and quantity are required."}, status=400)
+        return JsonResponse({"error": "Running article, line, and quantity are required."}, status=400)
 
     if quantity < 1:
         return JsonResponse({"error": "Quantity must be at least 1."}, status=400)
@@ -552,6 +847,19 @@ def qa_mark_defect(request):
     ).first()
     if line is None or defect is None:
         return JsonResponse({"error": "Select an assigned line and active defect."}, status=400)
+    article = Article.objects.filter(
+        pk=article_id,
+        orders__status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
+        orders__assignments__production_line__factory=line.factory,
+    ).distinct().first() if article_id else None
+    if article is None and article_id is None:
+        legacy_order = ProductionOrder.objects.filter(
+            status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
+            assignments__production_line=line,
+        ).select_related("article").order_by("delivery_date").first()
+        article = legacy_order.article if legacy_order else None
+    if article is None:
+        return JsonResponse({"error": "Select a running article from this factory."}, status=400)
 
     today = timezone.localdate()
     shift = FactoryShift.get_active_shift_for_factory(line.factory)
@@ -559,27 +867,23 @@ def qa_mark_defect(request):
     check_hour = schedule_status["number"] if schedule_status else timezone.localtime().hour
     check = HourlyLineCheck.objects.filter(
         production_line=line,
+        article=article,
         check_date=today,
         check_hour=check_hour,
     ).order_by("-created_at").first()
     if check is None:
-        assignment = (
-            LineAssignment.objects.filter(
-                production_line=line,
-                start_date__lte=today,
-            )
-            .exclude(status__in=[LineAssignment.Status.COMPLETED, LineAssignment.Status.CLOSED])
-            .select_related("production_order__article")
-            .order_by("-start_date")
-            .first()
-        )
-        if assignment is None:
-            return JsonResponse({"error": "No active production order is assigned to this line."}, status=400)
+        order = ProductionOrder.objects.filter(
+            article=article,
+            status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
+            assignments__production_line__factory=line.factory,
+        ).order_by("delivery_date").first()
+        if order is None:
+            return JsonResponse({"error": "No running order exists for this article in the factory."}, status=400)
         check = HourlyLineCheck.objects.create(
             factory=line.factory,
             production_line=line,
-            production_order=assignment.production_order,
-            article=assignment.production_order.article,
+            production_order=order,
+            article=article,
             check_date=today,
             check_hour=check_hour,
             shift_name=shift.shift_name if shift else "",
@@ -625,12 +929,26 @@ def qa_mark_pass(request):
 
     try:
         line_id = int(request.POST.get("line_id"))
+        article_id = int(request.POST.get("article_id")) if request.POST.get("article_id") else None
     except (TypeError, ValueError):
-        return JsonResponse({"error": "An assigned line is required."}, status=400)
+        return JsonResponse({"error": "A running article and assigned line are required."}, status=400)
 
     line = profile.assigned_lines.filter(pk=line_id).select_related("factory").first()
     if line is None:
         return JsonResponse({"error": "Select an assigned production line."}, status=400)
+    article = Article.objects.filter(
+        pk=article_id,
+        orders__status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
+        orders__assignments__production_line__factory=line.factory,
+    ).distinct().first() if article_id else None
+    if article is None and article_id is None:
+        legacy_order = ProductionOrder.objects.filter(
+            status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
+            assignments__production_line=line,
+        ).select_related("article").order_by("delivery_date").first()
+        article = legacy_order.article if legacy_order else None
+    if article is None:
+        return JsonResponse({"error": "Select a running article from this factory."}, status=400)
 
     today = timezone.localdate()
     shift = FactoryShift.get_active_shift_for_factory(line.factory)
@@ -638,27 +956,23 @@ def qa_mark_pass(request):
     check_hour = schedule_status["number"] if schedule_status else timezone.localtime().hour
     check = HourlyLineCheck.objects.filter(
         production_line=line,
+        article=article,
         check_date=today,
         check_hour=check_hour,
     ).order_by("-created_at").first()
     if check is None:
-        assignment = (
-            LineAssignment.objects.filter(
-                production_line=line,
-                start_date__lte=today,
-            )
-            .exclude(status__in=[LineAssignment.Status.COMPLETED, LineAssignment.Status.CLOSED])
-            .select_related("production_order__article")
-            .order_by("-start_date")
-            .first()
-        )
-        if assignment is None:
-            return JsonResponse({"error": "No active production order is assigned to this line."}, status=400)
+        order = ProductionOrder.objects.filter(
+            article=article,
+            status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
+            assignments__production_line__factory=line.factory,
+        ).order_by("delivery_date").first()
+        if order is None:
+            return JsonResponse({"error": "No running order exists for this article in the factory."}, status=400)
         check = HourlyLineCheck.objects.create(
             factory=line.factory,
             production_line=line,
-            production_order=assignment.production_order,
-            article=assignment.production_order.article,
+            production_order=order,
+            article=article,
             check_date=today,
             check_hour=check_hour,
             shift_name=shift.shift_name if shift else "",
@@ -676,11 +990,13 @@ def qa_mark_pass(request):
         shift_name=check.shift_name,
     )
     current_checks = shift_checks.filter(check_hour=check_hour)
+    shift_inspected, shift_passed, _ = _effective_qa_totals(shift_checks)
+    current_inspected, current_passed, _ = _effective_qa_totals(current_checks)
     return JsonResponse({
-        "inspected_quantity": sum(item.inspected_quantity for item in shift_checks),
-        "passed_quantity": sum(item.passed_quantity for item in shift_checks),
-        "current_hour_inspected": sum(item.inspected_quantity for item in current_checks),
-        "current_hour_passed": sum(item.passed_quantity for item in current_checks),
+        "inspected_quantity": shift_inspected,
+        "passed_quantity": shift_passed,
+        "current_hour_inspected": current_inspected,
+        "current_hour_passed": current_passed,
     })
 
 
@@ -714,7 +1030,18 @@ def qa_repair_defect(request):
     detail.save(update_fields=["repaired_quantity", "resolved", "resolved_at", "updated_at"])
     check = detail.hourly_check
     check.passed_quantity += repaired_quantity
-    check.save(update_fields=["passed_quantity", "updated_at"])
+    check.defective_quantity = max(check.defective_quantity - repaired_quantity, 0)
+    check.save(update_fields=["passed_quantity", "defective_quantity", "updated_at"])
+
+    today = timezone.localdate()
+    shift_checks = HourlyLineCheck.objects.filter(
+        production_line__in=profile.assigned_lines.all(),
+        check_date=today,
+        shift_name=check.shift_name,
+    )
+    current_checks = shift_checks.filter(check_hour=check.check_hour)
+    shift_inspected, shift_passed, shift_defects = _effective_qa_totals(shift_checks)
+    current_inspected, current_passed, current_defects = _effective_qa_totals(current_checks)
 
     return JsonResponse({
         "repaired_quantity": repaired_quantity,
@@ -722,6 +1049,16 @@ def qa_repair_defect(request):
         "tracking_code": detail.tracking_code,
         "marked_at": detail.marked_at.isoformat(),
         "resolved_at": detail.resolved_at.isoformat(),
+        "shift_totals": {
+            "inspected": shift_inspected,
+            "passed": shift_passed,
+            "defects": shift_defects,
+        },
+        "current_hour_totals": {
+            "inspected": current_inspected,
+            "passed": current_passed,
+            "defects": current_defects,
+        },
     })
 
 

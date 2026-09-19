@@ -25,6 +25,13 @@ class DailyProductionEntry(TimeStampedModel):
     assignment = models.ForeignKey(
         LineAssignment, on_delete=models.CASCADE, related_name="daily_entries"
     )
+    shift = models.ForeignKey(
+        "master_data.FactoryShift",
+        on_delete=models.PROTECT,
+        related_name="daily_production_entries",
+        null=True,
+        blank=True,
+    )
     production_date = models.DateField()
     actual_manpower = models.PositiveIntegerField(validators=[MinValueValidator(0)])
     working_minutes = models.PositiveIntegerField(
