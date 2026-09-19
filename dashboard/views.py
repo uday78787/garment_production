@@ -11,6 +11,7 @@ the templates.
 """
 
 import json
+import secrets
 from datetime import timedelta
 from decimal import Decimal
 from datetime import datetime, time
@@ -19,7 +20,8 @@ from pathlib import Path
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.conf import settings
 from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Sum
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+from django.views.decorators.http import require_GET, require_POST
 from django.shortcuts import redirect
 from django.utils import timezone
 from django.views.generic import TemplateView
@@ -29,7 +31,7 @@ from master_data.models import Article, Factory, FactoryShift, ProductionLineShi
 from planning.models import LineAssignment
 from planning.services.calculations import forecast_daily_output
 from production.models import DailyProductionEntry
-from quality.models import HourlyLineCheck
+from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail
 
 
 def _daily_detail_rows(request):
@@ -411,25 +413,316 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
         schedule_status = current_shift.current_schedule_status() if current_shift else None
         context["current_hour_label"] = schedule_status["window"] if schedule_status else "Not assigned"
         context["current_hour_number"] = schedule_status["label"] if schedule_status else "Not assigned"
-        context["current_hour_on_break"] = schedule_status["on_break"] if schedule_status else False
-        context["current_break_label"] = schedule_status["break_label"] if schedule_status else ""
         today_checks = HourlyLineCheck.objects.filter(
             production_line__in=profile.assigned_lines.all(),
             check_date=timezone.localdate(),
         ) if profile else HourlyLineCheck.objects.none()
-        current_hour_checks = today_checks.filter(check_hour=schedule_status["number"]) if schedule_status else today_checks.none()
+        dashboard_checks = today_checks
+        current_hour_number = schedule_status["number"] if schedule_status else timezone.localtime().hour
+        current_hour_checks = dashboard_checks.filter(
+            check_hour=current_hour_number,
+            shift_name=current_shift.shift_name if current_shift else "",
+        )
         context["qa_current_hour_inspected"] = sum(check.inspected_quantity for check in current_hour_checks)
         context["qa_current_hour_passed"] = sum(check.passed_quantity for check in current_hour_checks)
-        context["qa_current_hour_defects"] = sum(check.defective_quantity for check in current_hour_checks)
-        context["qa_today_inspected"] = sum(check.inspected_quantity for check in today_checks)
-        context["qa_today_passed"] = sum(check.passed_quantity for check in today_checks)
-        context["qa_today_defects"] = sum(check.defective_quantity for check in today_checks)
-        context["qa_today_dhu"] = (
-            context["qa_today_defects"] / context["qa_today_inspected"] * 100
-            if context["qa_today_inspected"] else 0
+        context["qa_current_hour_alter"] = sum(
+            detail.defect_quantity
+            for detail in HourlyLineCheckDetail.objects.filter(hourly_check__in=current_hour_checks)
         )
-        context["show_defect_panel"] = self.request.GET.get("show_defect") == "1"
+        context["qa_shift_inspected"] = sum(check.inspected_quantity for check in dashboard_checks)
+        context["qa_shift_passed"] = sum(check.passed_quantity for check in dashboard_checks)
+        context["qa_shift_defects"] = sum(check.defective_quantity for check in dashboard_checks)
+        hourly_report = []
+        summary_keys = set(dashboard_checks.values_list("check_date", "shift_name", "check_hour", "production_line_id"))
+        for check_date, shift_name, check_hour, line_id in sorted(summary_keys, key=lambda item: (item[0], item[1], item[2], item[3])):
+            summary_checks = dashboard_checks.filter(
+                check_date=check_date,
+                shift_name=shift_name,
+                check_hour=check_hour,
+                production_line_id=line_id,
+            )
+            summary_defects = HourlyLineCheckDetail.objects.filter(
+                hourly_check__in=summary_checks
+            ).aggregate(total=Sum("defect_quantity"))["total"] or 0
+            hourly_report.append({
+                "date": check_date.isoformat(),
+                "shift": shift_name or "Legacy shift",
+                "hour": check_hour,
+                "line": summary_checks.first().production_line.line_name,
+                "passed": sum(check.passed_quantity for check in summary_checks),
+                "alter": summary_defects,
+                "reject": 0,
+                "inspected": sum(check.inspected_quantity for check in summary_checks),
+                "current": check_date == timezone.localdate() and shift_name == (current_shift.shift_name if current_shift else "") and check_hour == current_hour_number,
+            })
+        context["hourly_report"] = hourly_report
+        repair_details = (
+            HourlyLineCheckDetail.objects.filter(
+                hourly_check__production_line__in=profile.assigned_lines.all(),
+                resolved=False,
+            )
+            .filter(repaired_quantity__lt=F("defect_quantity"))
+            .select_related(
+                "defect",
+                "hourly_check",
+                "hourly_check__production_line",
+                "hourly_check__article",
+            )
+            .order_by("hourly_check__check_date", "hourly_check__check_hour", "defect__defect_code")
+        ) if profile else HourlyLineCheckDetail.objects.none()
+        context["repair_queue"] = [
+            {
+                "id": detail.pk,
+                "tracking_code": detail.tracking_code,
+                "marked_at": detail.marked_at.isoformat(),
+                "resolved_at": detail.resolved_at.isoformat() if detail.resolved_at else None,
+                "code": detail.defect.defect_code,
+                "name": detail.defect.defect_name,
+                "qty": detail.defect_quantity - detail.repaired_quantity,
+                "line": detail.hourly_check.production_line.line_name,
+                "article": detail.hourly_check.article.article_code,
+                "shift": detail.hourly_check.shift_name,
+                "date": detail.hourly_check.check_date.isoformat(),
+                "hour": detail.hourly_check.check_hour,
+            }
+            for detail in repair_details
+        ]
+        context["defect_options"] = (
+            DefectMaster.objects.filter(active=True).order_by("defect_code")
+        )
         return context
+
+
+def _qa_profile(request):
+    profile = getattr(request.user, "profile", None)
+    if not profile or profile.role != "QA_PERMISSION":
+        return None
+    return profile
+
+
+@require_GET
+def qa_dashboard_data(request):
+    profile = _qa_profile(request)
+    if profile is None:
+        return JsonResponse({"error": "QA access is required."}, status=403)
+
+    dashboard = QADashboardView()
+    dashboard.request = request
+    context = dashboard.get_context_data()
+    return JsonResponse({
+        "factory": context["factory_name"],
+        "shift": context["current_shift"],
+        "current_hour": {
+            "number": context["current_hour_number"],
+            "label": context["current_hour_label"],
+            "inspected": context["qa_current_hour_inspected"],
+            "passed": context["qa_current_hour_passed"],
+            "alter": context["qa_current_hour_alter"],
+        },
+        "shift_totals": {
+            "inspected": context["qa_shift_inspected"],
+            "passed": context["qa_shift_passed"],
+            "alter": context["qa_shift_defects"],
+            "reject": 0,
+        },
+        "hourly_report": context["hourly_report"],
+        "pending_repairs": context["repair_queue"],
+    })
+
+
+@require_POST
+def qa_mark_defect(request):
+    profile = _qa_profile(request)
+    if profile is None:
+        return JsonResponse({"error": "QA access is required."}, status=403)
+
+    try:
+        payload = json.loads(request.body or "{}")
+        line_id = int(payload.get("line_id"))
+        quantity = int(payload.get("quantity"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return JsonResponse({"error": "Line and quantity are required."}, status=400)
+
+    if quantity < 1:
+        return JsonResponse({"error": "Quantity must be at least 1."}, status=400)
+
+    line = profile.assigned_lines.filter(pk=line_id).select_related("factory").first()
+    defect = DefectMaster.objects.filter(
+        defect_code=payload.get("defect_code"), active=True
+    ).first()
+    if line is None or defect is None:
+        return JsonResponse({"error": "Select an assigned line and active defect."}, status=400)
+
+    today = timezone.localdate()
+    shift = FactoryShift.get_active_shift_for_factory(line.factory)
+    schedule_status = shift.current_schedule_status() if shift else None
+    check_hour = schedule_status["number"] if schedule_status else timezone.localtime().hour
+    check = HourlyLineCheck.objects.filter(
+        production_line=line,
+        check_date=today,
+        check_hour=check_hour,
+    ).order_by("-created_at").first()
+    if check is None:
+        assignment = (
+            LineAssignment.objects.filter(
+                production_line=line,
+                start_date__lte=today,
+            )
+            .exclude(status__in=[LineAssignment.Status.COMPLETED, LineAssignment.Status.CLOSED])
+            .select_related("production_order__article")
+            .order_by("-start_date")
+            .first()
+        )
+        if assignment is None:
+            return JsonResponse({"error": "No active production order is assigned to this line."}, status=400)
+        check = HourlyLineCheck.objects.create(
+            factory=line.factory,
+            production_line=line,
+            production_order=assignment.production_order,
+            article=assignment.production_order.article,
+            check_date=today,
+            check_hour=check_hour,
+            shift_name=shift.shift_name if shift else "",
+            checker=request.user,
+            created_by=request.user,
+            status="SUBMITTED",
+        )
+
+    tracking_code = None
+    while tracking_code is None or HourlyLineCheckDetail.objects.filter(tracking_code=tracking_code).exists():
+        tracking_code = str(secrets.randbelow(900000) + 100000)
+    detail = HourlyLineCheckDetail.objects.create(
+        hourly_check=check,
+        defect=defect,
+        tracking_code=tracking_code,
+        defect_quantity=quantity,
+        created_by=request.user,
+    )
+    check.inspected_quantity += quantity
+    check.defective_quantity += quantity
+    check.save(update_fields=["inspected_quantity", "defective_quantity", "updated_at"])
+
+    return JsonResponse({
+        "id": detail.pk,
+        "tracking_code": detail.tracking_code,
+        "marked_at": detail.marked_at.isoformat(),
+        "code": defect.defect_code,
+        "name": defect.defect_name,
+        "qty": detail.defect_quantity - detail.repaired_quantity,
+        "line": line.line_name,
+        "article": check.article.article_code,
+        "shift": check.shift_name,
+        "date": check.check_date.isoformat(),
+        "hour": check.check_hour,
+    })
+
+
+@require_POST
+def qa_mark_pass(request):
+    profile = _qa_profile(request)
+    if profile is None:
+        return JsonResponse({"error": "QA access is required."}, status=403)
+
+    try:
+        line_id = int(request.POST.get("line_id"))
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "An assigned line is required."}, status=400)
+
+    line = profile.assigned_lines.filter(pk=line_id).select_related("factory").first()
+    if line is None:
+        return JsonResponse({"error": "Select an assigned production line."}, status=400)
+
+    today = timezone.localdate()
+    shift = FactoryShift.get_active_shift_for_factory(line.factory)
+    schedule_status = shift.current_schedule_status() if shift else None
+    check_hour = schedule_status["number"] if schedule_status else timezone.localtime().hour
+    check = HourlyLineCheck.objects.filter(
+        production_line=line,
+        check_date=today,
+        check_hour=check_hour,
+    ).order_by("-created_at").first()
+    if check is None:
+        assignment = (
+            LineAssignment.objects.filter(
+                production_line=line,
+                start_date__lte=today,
+            )
+            .exclude(status__in=[LineAssignment.Status.COMPLETED, LineAssignment.Status.CLOSED])
+            .select_related("production_order__article")
+            .order_by("-start_date")
+            .first()
+        )
+        if assignment is None:
+            return JsonResponse({"error": "No active production order is assigned to this line."}, status=400)
+        check = HourlyLineCheck.objects.create(
+            factory=line.factory,
+            production_line=line,
+            production_order=assignment.production_order,
+            article=assignment.production_order.article,
+            check_date=today,
+            check_hour=check_hour,
+            shift_name=shift.shift_name if shift else "",
+            checker=request.user,
+            created_by=request.user,
+            status="SUBMITTED",
+        )
+
+    check.inspected_quantity += 1
+    check.passed_quantity += 1
+    check.save(update_fields=["inspected_quantity", "passed_quantity", "updated_at"])
+    shift_checks = HourlyLineCheck.objects.filter(
+        production_line__in=profile.assigned_lines.all(),
+        check_date=today,
+        shift_name=check.shift_name,
+    )
+    current_checks = shift_checks.filter(check_hour=check_hour)
+    return JsonResponse({
+        "inspected_quantity": sum(item.inspected_quantity for item in shift_checks),
+        "passed_quantity": sum(item.passed_quantity for item in shift_checks),
+        "current_hour_inspected": sum(item.inspected_quantity for item in current_checks),
+        "current_hour_passed": sum(item.passed_quantity for item in current_checks),
+    })
+
+
+@require_POST
+def qa_repair_defect(request):
+    profile = _qa_profile(request)
+    if profile is None:
+        return JsonResponse({"error": "QA access is required."}, status=403)
+
+    try:
+        detail_id = int(request.POST.get("detail_id"))
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "A defect detail is required."}, status=400)
+
+    detail = (
+        HourlyLineCheckDetail.objects.filter(
+            pk=detail_id,
+            hourly_check__production_line__in=profile.assigned_lines.all(),
+            resolved=False,
+        )
+        .select_related("hourly_check")
+        .first()
+    )
+    if detail is None:
+        return JsonResponse({"error": "This defect is no longer awaiting repair."}, status=404)
+
+    repaired_quantity = detail.defect_quantity - detail.repaired_quantity
+    detail.repaired_quantity = detail.defect_quantity
+    detail.resolved = True
+    detail.resolved_at = timezone.now()
+    detail.save(update_fields=["repaired_quantity", "resolved", "resolved_at", "updated_at"])
+    check = detail.hourly_check
+    check.passed_quantity += repaired_quantity
+    check.save(update_fields=["passed_quantity", "updated_at"])
+
+    return JsonResponse({
+        "repaired_quantity": repaired_quantity,
+        "detail_id": detail.pk,
+        "tracking_code": detail.tracking_code,
+        "marked_at": detail.marked_at.isoformat(),
+        "resolved_at": detail.resolved_at.isoformat(),
+    })
 
 
 class FactorySelectorView(LoginRequiredMixin, TemplateView):

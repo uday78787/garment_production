@@ -1,4 +1,5 @@
 from decimal import Decimal
+import json
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
@@ -167,8 +168,137 @@ class HourlyQualityCheckTest(TestCase):
         self.assertRedirects(response, reverse("quality:hourly_check_list"))
         self.assertTrue(HourlyLineCheck.objects.filter(production_line=self.line, inspected_quantity=100).exists())
         dashboard_response = self.client.get(reverse("dashboard:qa_dashboard"))
-        self.assertEqual(dashboard_response.context["qa_today_passed"], 95)
-        self.assertEqual(dashboard_response.context["qa_today_defects"], 5)
+        self.assertEqual(dashboard_response.context["qa_shift_passed"], 95)
+        self.assertEqual(dashboard_response.context["qa_shift_defects"], 5)
+        self.assertEqual(dashboard_response.context["qa_current_hour_inspected"], 100)
+        self.assertEqual(dashboard_response.context["qa_current_hour_passed"], 95)
+
+    def test_checker_can_mark_repair_and_pass_defect_from_dashboard(self):
+        LineAssignment.objects.create(
+            production_line=self.line,
+            production_order=self.order,
+            start_date="2026-09-01",
+            default_manpower=30,
+            working_minutes_per_operator=480,
+            start_efficiency="0.25",
+            daily_efficiency_growth="0.05",
+            max_efficiency="0.60",
+        )
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.assigned_lines.add(self.line)
+        self.user.profile.save()
+        self.client.force_login(self.user)
+        defect = DefectMaster.objects.create(defect_code="D-REPAIR", defect_name="Repairable Seam")
+
+        mark_response = self.client.post(
+            reverse("dashboard:qa_mark_defect"),
+            data=json.dumps({"line_id": self.line.pk, "defect_code": defect.defect_code, "quantity": 3}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(mark_response.status_code, 200)
+        first_tracking_code = mark_response.json()["tracking_code"]
+        self.assertRegex(first_tracking_code, r"^\d{6}$")
+        detail = HourlyLineCheckDetail.objects.get(defect=defect)
+        self.assertEqual(detail.defect_quantity, 3)
+        self.assertEqual(detail.tracking_code, first_tracking_code)
+        self.assertIsNotNone(detail.marked_at)
+        second_mark_response = self.client.post(
+            reverse("dashboard:qa_mark_defect"),
+            data=json.dumps({"line_id": self.line.pk, "defect_code": defect.defect_code, "quantity": 1}),
+            content_type="application/json",
+        )
+        self.assertEqual(second_mark_response.status_code, 200)
+        self.assertNotEqual(first_tracking_code, second_mark_response.json()["tracking_code"])
+        dashboard_response = self.client.get(reverse("dashboard:qa_dashboard"))
+        self.assertEqual(len(dashboard_response.context["repair_queue"]), 2)
+        self.assertEqual(dashboard_response.context["repair_queue"][0]["qty"], 3)
+
+        repair_response = self.client.post(
+            reverse("dashboard:qa_repair_defect"),
+            {"detail_id": detail.pk},
+        )
+
+        self.assertEqual(repair_response.status_code, 200)
+        detail.refresh_from_db()
+        detail.hourly_check.refresh_from_db()
+        self.assertTrue(detail.resolved)
+        self.assertEqual(detail.repaired_quantity, 3)
+        self.assertIsNotNone(detail.resolved_at)
+        self.assertEqual(detail.hourly_check.passed_quantity, 3)
+
+    def test_checker_pass_actions_are_saved_to_hourly_check(self):
+        LineAssignment.objects.create(
+            production_line=self.line,
+            production_order=self.order,
+            start_date="2026-09-01",
+            default_manpower=30,
+            working_minutes_per_operator=480,
+            start_efficiency="0.25",
+            daily_efficiency_growth="0.05",
+            max_efficiency="0.60",
+        )
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.assigned_lines.add(self.line)
+        self.user.profile.save()
+        self.client.force_login(self.user)
+
+        for _ in range(2):
+            response = self.client.post(
+                reverse("dashboard:qa_mark_pass"),
+                {"line_id": self.line.pk},
+            )
+            self.assertEqual(response.status_code, 200)
+
+        check = HourlyLineCheck.objects.get(production_line=self.line)
+        self.assertEqual(check.inspected_quantity, 2)
+        self.assertEqual(check.passed_quantity, 2)
+        dashboard_response = self.client.get(reverse("dashboard:qa_dashboard"))
+        self.assertEqual(dashboard_response.context["qa_current_hour_inspected"], 2)
+        self.assertEqual(dashboard_response.context["qa_current_hour_passed"], 2)
+
+    def test_dashboard_shows_shift_totals_and_each_hour_row(self):
+        LineAssignment.objects.create(
+            production_line=self.line,
+            production_order=self.order,
+            start_date="2026-09-01",
+            default_manpower=30,
+            working_minutes_per_operator=480,
+            start_efficiency="0.25",
+            daily_efficiency_growth="0.05",
+            max_efficiency="0.60",
+        )
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.assigned_lines.add(self.line)
+        self.user.profile.save()
+        first_check = HourlyLineCheck.objects.create(
+            factory=self.factory, production_line=self.line, production_order=self.order,
+            article=self.article, check_date=timezone.localdate(), check_hour=9,
+            shift_name="Day Shift", inspected_quantity=5, passed_quantity=4,
+            defective_quantity=1, checker=self.user,
+        )
+        HourlyLineCheck.objects.create(
+            factory=self.factory, production_line=self.line, production_order=self.order,
+            article=self.article, check_date=timezone.localdate(), check_hour=10,
+            shift_name="Day Shift", inspected_quantity=3, passed_quantity=2,
+            defective_quantity=1, checker=self.user,
+        )
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("dashboard:qa_dashboard"))
+        self.assertEqual(response.context["qa_shift_inspected"], 8)
+        self.assertEqual(response.context["qa_shift_passed"], 6)
+        self.assertEqual(len(response.context["hourly_report"]), 2)
+
+        api_response = self.client.get(reverse("dashboard:qa_dashboard_data"))
+        self.assertEqual(api_response.status_code, 200)
+        payload = api_response.json()
+        self.assertEqual(payload["shift_totals"]["inspected"], 8)
+        self.assertEqual(payload["shift_totals"]["passed"], 6)
+        self.assertEqual(len(payload["hourly_report"]), 2)
+        self.assertIn("pending_repairs", payload)
 
 
 class QAPermissionTest(TestCase):
@@ -219,10 +349,39 @@ class QAPermissionTest(TestCase):
         response = self.client.get(reverse("dashboard:qa_dashboard"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Current Shift")
-        self.assertContains(response, "Current Hour")
+        self.assertContains(response, "Inspection")
+        self.assertContains(response, "Line: QA Line 01")
+        self.assertContains(response, "Line Hour Inspection Report")
+        self.assertContains(response, "Total Pass pcs")
+        self.assertContains(response, "Total Inspected pcs")
+        self.assertContains(response, "Total Defect pcs")
+        self.assertContains(response, "Show Repaired Defect")
+        self.assertContains(response, "Repair")
+        self.assertContains(response, 'data-status="REJECT" disabled')
         self.assertNotContains(response, "New Check")
         self.assertNotContains(response, '<label class="form-label">Hour</label>')
+
+    def test_qa_dashboard_lists_defect_options_for_alter_workflow(self):
+        factory = Factory.objects.create(name="Factory Defect", code="FD1")
+        line = ProductionLine.objects.create(
+            factory=factory,
+            line_name="QA Line 02",
+            capacity_manpower=30,
+            default_working_minutes=480,
+        )
+        DefectMaster.objects.create(defect_code="D-100", defect_name="Broken Stitch", active=True)
+        user = get_user_model().objects.create_user(username="qa_defect_check", password="pass1234")
+        user.profile.role = UserProfile.Role.QA_PERMISSION
+        user.profile.factory = factory
+        user.profile.save()
+        user.profile.assigned_lines.add(line)
+
+        self.client.login(username="qa_defect_check", password="pass1234")
+        response = self.client.get(reverse("dashboard:qa_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Mark defect")
+        self.assertContains(response, "Broken Stitch")
 
     def test_factory_shift_supports_custom_hours_and_overtime(self):
         factory = Factory.objects.create(name="Shift Factory", code="SF1")

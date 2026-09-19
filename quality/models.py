@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 from common.models import TimeStampedModel
 from master_data.models import Article, Factory, ProductionLine
@@ -77,6 +78,7 @@ class HourlyLineCheck(TimeStampedModel):
     article = models.ForeignKey(Article, on_delete=models.PROTECT, related_name="hourly_line_checks")
     check_date = models.DateField()
     check_hour = models.PositiveIntegerField(default=9, help_text="Hour of the shift check, for example 9, 10, 11.")
+    shift_name = models.CharField(max_length=100, blank=True)
     inspected_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     passed_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     defective_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
@@ -102,6 +104,9 @@ class HourlyLineCheck(TimeStampedModel):
 class HourlyLineCheckDetail(TimeStampedModel):
     hourly_check = models.ForeignKey(HourlyLineCheck, on_delete=models.CASCADE, related_name="details")
     defect = models.ForeignKey(DefectMaster, on_delete=models.PROTECT, related_name="hourly_check_details")
+    tracking_code = models.CharField(max_length=6, unique=True, null=True, blank=True, editable=False)
+    marked_at = models.DateTimeField(default=timezone.now, editable=False)
+    resolved_at = models.DateTimeField(null=True, blank=True, editable=False)
     defect_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     repaired_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     resolved = models.BooleanField(default=False)

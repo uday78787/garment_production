@@ -244,6 +244,7 @@ def hourly_check_create(request):
             article=article,
             check_date=timezone.localdate(),
             check_hour=schedule_status["number"] if schedule_status else timezone.localtime().hour,
+            shift_name=current_shift.shift_name if current_shift else "",
             inspected_quantity=inspected_quantity,
             passed_quantity=passed_quantity,
             defective_quantity=total_defective,

@@ -34,6 +34,10 @@
                 </span>
                 <span class="text-white-50">|</span>
                 <span class="fw-semibold" id="qa-live-time">Live Time (IST)</span>
+                <form method="post" action="{% url 'accounts:logout' %}" class="d-inline ms-2">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline-light btn-sm px-3 py-1">Logout</button>
+                </form>
             </div>
         </div>
     </nav>
