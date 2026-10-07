@@ -228,6 +228,8 @@
             <th>Code</th>
             <th>Start Time</th>
             <th>End Time</th>
+            <th>Lunch Break</th>
+            <th>Overtime</th>
             <th>Shift Hours</th>
           </tr>
         </thead>
@@ -239,12 +241,14 @@
               <td>{{ shift.preset_code|default:shift.shift_name|lower|cut:' ' }}</td>
               <td>{{ shift.start_time|time:"h:i A" }}</td>
               <td>{{ shift.end_time|time:"h:i A" }}</td>
+              <td>{% if shift.overtime_start_time %}{{ shift.start_time|time:"h:i A" }} to {{ shift.end_time|time:"h:i A" }}{% else %}-{% endif %}</td>
+              <td>{% if shift.overtime_start_time %}{{ shift.overtime_start_time|time:"h:i A" }} ({{ shift.overtime_hours }}h){% else %}-{% endif %}</td>
               <td>{{ shift.total_shift_hours }}</td>
             </tr>
             {% endfor %}
           {% else %}
             <tr>
-              <td colspan="5" class="text-center text-muted py-4">No shifts configured for this location yet.</td>
+              <td colspan="7" class="text-center text-muted py-4">No shifts configured for this location yet.</td>
             </tr>
           {% endif %}
         </tbody>
@@ -253,17 +257,17 @@
   </div>
 
   <div class="manage-panel" id="shift-editor">
-    <h4>Manage Shifts</h4>
+    <h4>Shift Setup</h4>
     <div class="info-note">
-      This shift cannot be edited because it is already assigned to a production line. Please create a new shift instead of modifying the existing one.
+      Use the factory standard pattern below: Day Shift 09:00 to 17:30 with a lunch break from 12:00 to 12:30, then overtime from 17:30 to 20:30 (3 hours).
     </div>
 
     <form method="post" id="shift-form">
       {% csrf_token %}
       <div class="form-grid">
         <div class="field">
-          <label for="shift_name">Name</label>
-          <input id="shift_name" type="text" name="shift_name" value="DAY SHIFT 1-A11" required>
+          <label for="shift_name">Shift Name</label>
+          <input id="shift_name" type="text" name="shift_name" value="Day Shift" required>
         </div>
         <div class="field">
           <label for="factory">Location</label>
@@ -275,23 +279,31 @@
         </div>
         <div class="field">
           <label for="start_time">Start Time</label>
-          <input id="start_time" type="time" name="start_time" value="08:30" required>
+          <input id="start_time" type="time" name="start_time" value="09:00" required>
         </div>
         <div class="field">
           <label for="end_time">End Time</label>
-          <input id="end_time" type="time" name="end_time" value="17:00" required>
+          <input id="end_time" type="time" name="end_time" value="17:30" required>
         </div>
         <div class="field">
-          <label for="period">Shift Hours</label>
-          <input id="period" type="number" name="standard_hours" min="1" max="8" value="8">
+          <label for="lunch_break_start">Lunch Break Start</label>
+          <input id="lunch_break_start" type="time" name="lunch_break_start" value="12:00">
+        </div>
+        <div class="field">
+          <label for="lunch_break_end">Lunch Break End</label>
+          <input id="lunch_break_end" type="time" name="lunch_break_end" value="12:30">
+        </div>
+        <div class="field">
+          <label for="standard_hours">Working Hours</label>
+          <input id="standard_hours" type="number" name="standard_hours" min="1" max="12" value="8">
         </div>
         <div class="field">
           <label for="overtime_hours">Overtime Hours</label>
-          <input id="overtime_hours" type="number" name="overtime_hours" min="0" max="8" value="0">
+          <input id="overtime_hours" type="number" name="overtime_hours" min="0" max="8" value="3">
         </div>
         <div class="field">
           <label for="overtime_start_time">Overtime Start Time</label>
-          <input id="overtime_start_time" type="time" name="overtime_start_time">
+          <input id="overtime_start_time" type="time" name="overtime_start_time" value="17:30">
         </div>
         <div class="field">
           <label for="description">Notes</label>
@@ -305,27 +317,28 @@
       </div>
 
       <div class="hours-box">
+        <h5 class="mb-3">Hour Schedule Preview</h5>
         {% for hour in "12345678" %}
         <div class="hour-row" data-hour="{{ hour }}">
           <div class="hour-label">Hour {{ hour }}</div>
           <div class="field">
             <label>Start Time</label>
-            <input type="time" name="hour_{{ hour }}_start" value="{% if hour == '1' %}08:30{% elif hour == '2' %}09:30{% elif hour == '3' %}10:30{% elif hour == '4' %}11:30{% elif hour == '5' %}12:30{% elif hour == '6' %}13:30{% elif hour == '7' %}14:30{% else %}15:30{% endif %}">
+            <input type="time" name="hour_{{ hour }}_start" value="{% if hour == '1' %}09:00{% elif hour == '2' %}10:00{% elif hour == '3' %}11:00{% elif hour == '4' %}12:00{% elif hour == '5' %}13:00{% elif hour == '6' %}14:00{% elif hour == '7' %}15:00{% else %}16:00{% endif %}">
           </div>
           <div class="field">
             <label>End Time</label>
-            <input type="time" name="hour_{{ hour }}_end" value="{% if hour == '1' %}09:30{% elif hour == '2' %}10:30{% elif hour == '3' %}11:30{% elif hour == '4' %}12:30{% elif hour == '5' %}13:30{% elif hour == '6' %}14:30{% elif hour == '7' %}15:30{% else %}16:30{% endif %}">
+            <input type="time" name="hour_{{ hour }}_end" value="{% if hour == '1' %}10:00{% elif hour == '2' %}11:00{% elif hour == '3' %}12:00{% elif hour == '4' %}13:00{% elif hour == '5' %}14:00{% elif hour == '6' %}15:00{% elif hour == '7' %}16:00{% else %}17:00{% endif %}">
           </div>
           <div class="field">
-            <label>Break Time</label>
+            <label>Lunch Break</label>
             <div class="break-editor">
-              <input type="time" name="hour_{{ hour }}_break_start" value="12:30">
+              <input type="time" name="hour_{{ hour }}_break_start" value="{% if hour == '4' %}12:00{% else %}''{% endif %}">
               <span>to</span>
-              <input type="time" name="hour_{{ hour }}_break_end" value="13:00">
+              <input type="time" name="hour_{{ hour }}_break_end" value="{% if hour == '4' %}12:30{% else %}''{% endif %}">
             </div>
           </div>
           <div class="break-drop-zone" data-hour="{{ hour }}" draggable="true">
-            <span>Drag Break Here</span>
+            <span>{% if hour == '4' %}Lunch Break{% else %}No Break{% endif %}</span>
           </div>
         </div>
         {% endfor %}
@@ -343,68 +356,47 @@
 <script>
   (function () {
     const factoryFilter = document.getElementById('factory-filter');
-    factoryFilter.addEventListener('change', () => {
-      window.location.href = `${window.location.pathname}?factory=${factoryFilter.value}`;
-    });
-    const breakBlocks = [];
+    if (factoryFilter) {
+      factoryFilter.addEventListener('change', () => {
+        window.location.href = `${window.location.pathname}?factory=${factoryFilter.value}`;
+      });
+    }
     const form = document.getElementById('shift-form');
     const hiddenBreaks = document.getElementById('break_blocks');
-    const zones = document.querySelectorAll('.break-drop-zone');
+    const lunchStart = document.getElementById('lunch_break_start');
+    const lunchEnd = document.getElementById('lunch_break_end');
+    const overtimeStart = document.getElementById('overtime_start_time');
 
-    function syncBreaks() {
-      hiddenBreaks.value = JSON.stringify(breakBlocks);
-      zones.forEach((zone) => {
-        const hour = zone.dataset.hour;
-        const item = breakBlocks.find((b) => b.hour === hour);
-        if (item) {
-          zone.innerHTML = `<span class="break-chip">Break ${item.start} - ${item.end}<span class="close" data-remove="${hour}">×</span></span>`;
-        } else {
-          zone.innerHTML = '<span>Drag Break Here</span>';
+    function syncLunchBreakPreview() {
+      const lunchStartVal = lunchStart && lunchStart.value ? lunchStart.value : '12:00';
+      const lunchEndVal = lunchEnd && lunchEnd.value ? lunchEnd.value : '12:30';
+      const startVal = overtimeStart && overtimeStart.value ? overtimeStart.value : '17:30';
+      document.querySelectorAll('.hour-row').forEach((row) => {
+        const hour = row.dataset.hour;
+        const startInput = row.querySelector('input[name="hour_' + hour + '_break_start"]');
+        const endInput = row.querySelector('input[name="hour_' + hour + '_break_end"]');
+        if (startInput && endInput) {
+          const hourStart = row.querySelector('input[name="hour_' + hour + '_start"]').value;
+          const hourEnd = row.querySelector('input[name="hour_' + hour + '_end"]').value;
+          if (hourStart <= lunchStartVal && lunchEndVal <= hourEnd) {
+            startInput.value = lunchStartVal;
+            endInput.value = lunchEndVal;
+          } else if (hourStart <= startVal && startVal < hourEnd) {
+            startInput.value = '';
+            endInput.value = '';
+          } else {
+            startInput.value = '';
+            endInput.value = '';
+          }
         }
       });
     }
 
-    zones.forEach((zone) => {
-      zone.addEventListener('dragover', (event) => {
-        event.preventDefault();
-      });
-      zone.addEventListener('drop', (event) => {
-        event.preventDefault();
-        const hour = zone.dataset.hour;
-        const start = document.getElementsByName(`hour_${hour}_break_start`)[0].value || '12:00';
-        const end = document.getElementsByName(`hour_${hour}_break_end`)[0].value || '12:30';
-        const existing = breakBlocks.findIndex((b) => b.hour === hour);
-        const block = { hour, label: `Break ${hour}`, start, end };
-        if (existing >= 0) breakBlocks.splice(existing, 1, block);
-        else breakBlocks.push(block);
-        syncBreaks();
-      });
-      zone.addEventListener('click', () => {
-        const hour = zone.dataset.hour;
-        const existing = breakBlocks.find((b) => b.hour === hour);
-        const start = document.getElementsByName(`hour_${hour}_break_start`)[0].value || '12:00';
-        const end = document.getElementsByName(`hour_${hour}_break_end`)[0].value || '12:30';
-        if (existing) {
-          existing.start = start;
-          existing.end = end;
-        } else {
-          breakBlocks.push({ hour, label: `Break ${hour}`, start, end });
-        }
-        syncBreaks();
-      });
+    [lunchStart, lunchEnd, overtimeStart].forEach((el) => {
+      if (el) el.addEventListener('change', syncLunchBreakPreview);
     });
-
-    document.addEventListener('click', (event) => {
-      const remove = event.target.dataset.remove;
-      if (remove) {
-        const idx = breakBlocks.findIndex((b) => b.hour === remove);
-        if (idx >= 0) breakBlocks.splice(idx, 1);
-        syncBreaks();
-      }
-    });
-
     form.addEventListener('submit', () => {
-      hiddenBreaks.value = JSON.stringify(breakBlocks);
+      hiddenBreaks.value = JSON.stringify([]);
     });
   })();
 </script>

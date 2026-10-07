@@ -27,12 +27,38 @@ from django.utils import timezone
 from django.views.generic import TemplateView
 
 from accounts.mixins import AdminRequiredMixin, admin_required
-from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLineShiftAssignment
+from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLine, ProductionLineShiftAssignment
 from planning.models import LineAssignment, ProductionOrder
 from planning.services.calculations import forecast_daily_output
 from planning.services import calculations as calc
 from production.models import DailyProductionEntry
-from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail
+from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail, HourlyLineSummary
+
+
+def _schedule_working_minutes(shift, hour_number):
+    """Return the working minutes represented by one QA check hour."""
+    for item in shift.hourly_schedule or []:
+        if str(item.get("hour")) != str(hour_number):
+            continue
+        try:
+            start = time.fromisoformat(str(item.get("start")))
+            end = time.fromisoformat(str(item.get("end")))
+            start_minutes = start.hour * 60 + start.minute
+            end_minutes = end.hour * 60 + end.minute
+            if end_minutes <= start_minutes:
+                end_minutes += 24 * 60
+            minutes = end_minutes - start_minutes
+            break_start = item.get("break_start")
+            break_end = item.get("break_end")
+            if break_start and break_end:
+                pause_start = time.fromisoformat(str(break_start))
+                pause_end = time.fromisoformat(str(break_end))
+                pause_minutes = (pause_end.hour * 60 + pause_end.minute) - (pause_start.hour * 60 + pause_start.minute)
+                minutes -= max(pause_minutes, 0)
+            return max(minutes, 0)
+        except (TypeError, ValueError):
+            break
+    return 60
 
 
 def _daily_detail_rows(request):
@@ -53,8 +79,12 @@ def _daily_detail_rows(request):
         target_output=Sum("target_output"),
         actual_output=Sum("actual_output"),
         manpower=Sum("actual_manpower"),
-        average_efficiency=Avg("actual_efficiency"),
-        average_planned_efficiency=Avg("planned_efficiency"),
+        planned_productive_minutes=Sum(
+            ExpressionWrapper(
+                F("available_minutes") * F("planned_efficiency"),
+                output_field=DecimalField(max_digits=14, decimal_places=2),
+            )
+        ),
         gain_loss_minutes=Sum("gain_loss_minutes"),
     ).order_by("-production_date", "assignment__production_line__line_name")
     rows = []
@@ -62,8 +92,9 @@ def _daily_detail_rows(request):
         available = Decimal(row["total_available_minutes"] or 0)
         produced = Decimal(row["total_produced_minutes"] or 0)
         daily_efficiency = produced / available * 100 if available else Decimal("0")
-        average_efficiency = Decimal(row["average_efficiency"] or 0) * 100
-        planned_efficiency = Decimal(row["average_planned_efficiency"] or 0) * 100
+        actual_efficiency = produced / available * 100 if available else Decimal("0")
+        planned_minutes = Decimal(row["planned_productive_minutes"] or 0)
+        planned_efficiency = planned_minutes / available * 100 if available else Decimal("0")
         rows.append({
             "Date": row["production_date"],
             "Line": row["assignment__production_line__line_name"],
@@ -72,7 +103,7 @@ def _daily_detail_rows(request):
             "Available Minutes": available,
             "Produced Minutes": produced,
             "Daily Eff %": daily_efficiency,
-            "Avg Eff %": average_efficiency,
+            "Avg Eff %": actual_efficiency,
             "Target": row["target_output"] or 0,
             "Actual Production": row["actual_output"] or 0,
             "Target vs Actual": (row["actual_output"] or 0) - (row["target_output"] or 0),
@@ -86,11 +117,16 @@ def _daily_detail_rows(request):
         average_manpower=Avg("actual_manpower"),
         total_available_minutes=Sum("available_minutes"),
         total_produced_minutes=Sum("produced_minutes"),
-        average_efficiency=Avg("actual_efficiency"),
     )
     summary = {
         "Total Days": len(dates),
-        "Avg. Eff %": Decimal(aggregate["average_efficiency"] or 0) * 100,
+        "Avg. Eff %": (
+            Decimal(aggregate["total_produced_minutes"] or 0)
+            / Decimal(aggregate["total_available_minutes"] or 1)
+            * 100
+            if aggregate["total_available_minutes"]
+            else Decimal("0")
+        ),
         "Total Production": aggregate["total_production"] or 0,
         "Avg. Manpower": Decimal(aggregate["average_manpower"] or 0),
         "Total Available Minutes": aggregate["total_available_minutes"] or 0,
@@ -205,21 +241,21 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             .order_by("-total_defects", "defect__defect_code")
         )
         daily = (
-            qs.values("check_date")
+            qs.values("check_date", "shift_name")
             .annotate(
                 total_inspected=Sum("inspected_quantity"),
                 total_passed=Sum("passed_quantity"),
             )
-            .order_by("check_date")
+            .order_by("check_date", "shift_name")
         )
         marked_defects_by_date = {
-            row["hourly_check__check_date"]: row["total"] or 0
+            (row["hourly_check__check_date"], row["hourly_check__shift_name"]): row["total"] or 0
             for row in HourlyLineCheckDetail.objects.filter(
                 hourly_check__in=qs
-            ).values("hourly_check__check_date").annotate(total=Sum("defect_quantity"))
+            ).values("hourly_check__check_date", "hourly_check__shift_name").annotate(total=Sum("defect_quantity"))
         }
         daily = [
-            {**row, "total_defects": marked_defects_by_date.get(row["check_date"], 0)}
+            {**row, "total_defects": marked_defects_by_date.get((row["check_date"], row["shift_name"]), 0)}
             for row in daily
         ]
         return {
@@ -257,6 +293,8 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             (row.production_line_id, row.entry_date, row.shift.shift_name): row
             for row in manpower_rows
         }
+        counted_manpower = {}
+        counted_targets = set()
 
         for check in checks:
             assignment = LineAssignment.objects.filter(
@@ -267,7 +305,7 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             ).first()
             shift = shifts.get(check.shift_name)
             manpower = manpower_lookup.get((check.production_line_id, check.check_date, check.shift_name))
-            working_minutes = manpower.working_minutes if manpower else (shift.shift_minutes if shift else 0)
+            working_minutes = _schedule_working_minutes(shift, check.check_hour) if shift else 60
             actual_output = Decimal(check.inspected_quantity or 0)
             produced_minutes = actual_output * check.article.sam
             if assignment:
@@ -288,35 +326,51 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                 available_minutes = Decimal(manpower.manpower if manpower else 0) * Decimal(working_minutes)
                 target_output = Decimal("0")
 
+            target_key = (check.production_line_id, check.check_date, check.shift_name or "Unassigned")
             line_key = check.production_line_id
             line_row = line_rows.setdefault(line_key, {
                 "assignment__production_line__line_name": check.production_line.line_name,
                 "planned_output": Decimal("0"),
                 "actual_output": Decimal("0"),
             })
-            line_row["planned_output"] += target_output
+            if target_key not in counted_targets:
+                line_row["planned_output"] += target_output
+                counted_targets.add(target_key)
             line_row["actual_output"] += actual_output
 
-            daily_key = (check.check_date, check.production_line_id, check.article_id)
+            daily_key = (check.check_date, check.production_line_id, check.article_id, check.shift_name)
             daily_row = daily_rows.setdefault(daily_key, {
                 "date": check.check_date,
                 "line": check.production_line.line_name,
+                "line_id": check.production_line_id,
                 "article": check.article.article_code,
+                "article_id": check.article_id,
+                "shift": check.shift_name or "Unassigned",
+                "order_id": check.production_order_id,
+                "order_number": check.production_order.order_number,
+                "sam": check.article.sam,
                 "manpower": 0,
                 "available_minutes": Decimal("0"),
                 "produced_minutes": Decimal("0"),
-                "planned_efficiency_total": Decimal("0"),
+                "planned_productive_minutes": Decimal("0"),
                 "actual_output": Decimal("0"),
                 "target_output": Decimal("0"),
                 "count": 0,
                 "defect_pieces": 0,
             })
-            daily_row["manpower"] += manpower.manpower if manpower else 0
-            daily_row["available_minutes"] += available_minutes
+            manpower_key = (check.production_line_id, check.check_date, check.shift_name)
+            counted_shifts = counted_manpower.setdefault(daily_key, set())
+            if manpower and manpower_key not in counted_shifts:
+                daily_row["manpower"] += manpower.manpower
+                daily_row["available_minutes"] += Decimal(manpower.manpower) * Decimal(manpower.working_minutes)
+                daily_row["planned_productive_minutes"] += (
+                    Decimal(manpower.manpower)
+                    * Decimal(manpower.working_minutes)
+                    * planned_efficiency
+                )
+                counted_shifts.add(manpower_key)
             daily_row["produced_minutes"] += produced_minutes
-            daily_row["planned_efficiency_total"] += planned_efficiency
             daily_row["actual_output"] += actual_output
-            daily_row["target_output"] += target_output
             daily_row["count"] += 1
             daily_row["defect_pieces"] += check.details.aggregate(
                 total=Sum("defect_quantity")
@@ -332,8 +386,38 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                 "forecast_daily_output": Decimal("0"),
                 "expected_days_remaining": None,
             })
-            forecast_row["planned_output"] += target_output
+            forecast_target_key = (check.production_line_id, check.production_order_id, check.article_id, check.check_date, check.shift_name or "Unassigned")
+            if forecast_target_key not in counted_targets:
+                forecast_row["planned_output"] += target_output
+                counted_targets.add(forecast_target_key)
             forecast_row["actual_output"] += actual_output
+
+        line_rows = {}
+        forecast_rows = {}
+        for row in daily_rows.values():
+            row["target_output"] = calc.target_output(
+                row["planned_productive_minutes"], row["sam"]
+            ) if row["available_minutes"] else Decimal("0")
+            line_row = line_rows.setdefault(row["line_id"], {
+                "assignment__production_line__line_name": row["line"],
+                "planned_output": Decimal("0"),
+                "actual_output": Decimal("0"),
+            })
+            line_row["planned_output"] += row["target_output"]
+            line_row["actual_output"] += row["actual_output"]
+
+            forecast_key = (row["line_id"], row["order_id"], row["article_id"])
+            forecast_row = forecast_rows.setdefault(forecast_key, {
+                "line_name": row["line"],
+                "order_number": row["order_number"],
+                "article_code": row["article"],
+                "planned_output": Decimal("0"),
+                "actual_output": Decimal("0"),
+                "forecast_daily_output": Decimal("0"),
+                "expected_days_remaining": None,
+            })
+            forecast_row["planned_output"] += row["target_output"]
+            forecast_row["actual_output"] += row["actual_output"]
 
         for row in line_rows.values():
             row["variance"] = row["actual_output"] - row["planned_output"]
@@ -343,11 +427,12 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             detail_rows.append({
                 "date": row["date"],
                 "line": row["line"],
+                "shift": row["shift"],
                 "article": row["article"],
                 "manpower": row["manpower"],
                 "available_minutes": available,
                 "produced_minutes": row["produced_minutes"],
-                "planned_efficiency": row["planned_efficiency_total"] / row["count"] * 100 if row["count"] else Decimal("0"),
+                "planned_efficiency": row["planned_productive_minutes"] / available * 100 if available else Decimal("0"),
                 "actual_efficiency": row["produced_minutes"] / available * 100 if available else Decimal("0"),
                 "daily_efficiency": row["produced_minutes"] / available * 100 if available else Decimal("0"),
                 "target_output": row["target_output"],
@@ -355,7 +440,7 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                 "defect_pieces": row["defect_pieces"],
                 "dhu": row["defect_pieces"] / row["actual_output"] * 100 if row["actual_output"] else Decimal("0"),
                 "difference": row["actual_output"] - row["target_output"],
-                "gain_loss_minutes": row["produced_minutes"] - (available * row["planned_efficiency_total"] / row["count"] if row["count"] else 0),
+                "gain_loss_minutes": row["produced_minutes"] - row["planned_productive_minutes"],
             })
         return list(line_rows.values()), detail_rows, list(forecast_rows.values())
 
@@ -364,11 +449,12 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
 
         date_from = self.request.GET.get("date_from")
         date_to = self.request.GET.get("date_to")
+        if not date_from and not date_to:
+            today = timezone.localdate()
+            date_from = today.isoformat()
+            date_to = today.isoformat()
         if date_from:
             entries = entries.filter(production_date__gte=date_from)
-        elif not date_to:
-            entries = entries.filter(production_date__gte=timezone.localdate() - timedelta(days=self.days_back))
-
         if date_to:
             entries = entries.filter(production_date__lte=date_to)
 
@@ -381,13 +467,15 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         entries = self.get_filtered_entries()
         selected_factory_id = self.get_auto_selected_factory_id()
-        date_from = self.request.GET.get("date_from")
-        date_to = self.request.GET.get("date_to")
+        date_from = self.request.GET.get("date_from") or timezone.localdate().isoformat()
+        date_to = self.request.GET.get("date_to") or timezone.localdate().isoformat()
         current_factory = Factory.objects.filter(pk=selected_factory_id).first() if selected_factory_id else None
         current_shift = FactoryShift.get_active_shift_for_factory(current_factory) if current_factory else None
+        schedule_status = current_shift.current_schedule_status() if current_shift else None
         context["current_factory_name"] = current_factory.name if current_factory else "No factory selected"
         context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
-        context["current_hour_label"] = current_shift.current_hour_label() if current_shift else "Not assigned"
+        context["current_hour_label"] = schedule_status["label"] if schedule_status else "Not assigned"
+        context["current_hour_window"] = schedule_status["window"] if schedule_status else "Not assigned"
         selected_style_id = self.request.GET.get("style")
         if selected_style_id and selected_style_id.isdigit():
             entries = entries.filter(assignment__production_order__article_id=selected_style_id)
@@ -396,15 +484,160 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
         context["selected_date_to"] = date_to or ""
         context["daily_detail_export_query"] = self.request.GET.urlencode()
 
+        selected_line_summary_line = self.request.GET.get("line_summary_line")
+        selected_line_summary_date = self.request.GET.get("line_summary_date") or date_from or timezone.localdate().isoformat()
+        context["selected_line_summary_line"] = int(selected_line_summary_line) if selected_line_summary_line and selected_line_summary_line.isdigit() else None
+        context["selected_line_summary_date"] = selected_line_summary_date
+        if selected_factory_id:
+            factory_lines = ProductionLine.objects.filter(factory_id=selected_factory_id, active_status=True)
+            if not self.request.user.is_superuser and hasattr(self.request.user, "profile"):
+                profile = self.request.user.profile
+                if getattr(profile, "is_admin", False):
+                    factory_lines = factory_lines.filter(factory_id__in=profile.accessible_factories.values_list("pk", flat=True))
+                else:
+                    factory_lines = factory_lines.filter(pk__in=profile.assigned_lines.values_list("pk", flat=True))
+            context["line_summary_lines"] = factory_lines.distinct().order_by("line_name")
+        else:
+            context["line_summary_lines"] = ProductionLine.objects.none()
+
+        line_summary_qs = HourlyLineCheck.objects.filter(factory_id=selected_factory_id).select_related("production_line", "article", "production_order")
+        if selected_line_summary_date:
+            line_summary_qs = line_summary_qs.filter(check_date=selected_line_summary_date)
+        if context["selected_line_summary_line"]:
+            line_summary_qs = line_summary_qs.filter(production_line_id=context["selected_line_summary_line"])
+
+        line_summary_by_line = {}
+        counted_line_targets = set()
+        for check in line_summary_qs.order_by("production_line__line_name", "check_hour"):
+            manpower_entry = LineShiftManpower.objects.filter(
+                factory_id=selected_factory_id,
+                production_line=check.production_line,
+                entry_date=check.check_date,
+                shift__shift_name=check.shift_name,
+            ).select_related("shift").order_by("-id").first()
+            manpower = manpower_entry.manpower if manpower_entry else 0
+            working_minutes = manpower_entry.working_minutes if manpower_entry else 60
+            available_minutes = Decimal(manpower) * Decimal(working_minutes)
+            defect_total = check.details.aggregate(total=Sum("defect_quantity"))["total"] or 0
+            produced_minutes = Decimal(check.inspected_quantity or 0) * Decimal(check.article.sam)
+            assignment = LineAssignment.objects.filter(
+                production_line=check.production_line,
+                production_order=check.production_order,
+            ).first() or LineAssignment.objects.filter(
+                production_order=check.production_order,
+            ).first()
+            planned_efficiency = Decimal("0")
+            target_output = Decimal("0")
+            if assignment:
+                day_number = max((check.check_date - assignment.start_date).days + 1, 1)
+                planned_efficiency = calc.planned_efficiency(
+                    assignment.start_efficiency,
+                    assignment.daily_efficiency_growth,
+                    day_number,
+                    assignment.max_efficiency,
+                )
+                target_output = calc.target_output(
+                    calc.planned_productive_minutes(available_minutes, planned_efficiency),
+                    check.article.sam,
+                ) if available_minutes else Decimal("0")
+
+            line = line_summary_by_line.setdefault(
+                check.production_line_id,
+                {
+                    "summary_date": check.check_date,
+                    "production_line": check.production_line,
+                    "production_line_id": check.production_line_id,
+                    "production_line__line_name": check.production_line.line_name,
+                    "shift_name": check.shift_name or "Unassigned",
+                    "target_output": Decimal("0"),
+                    "actual_output": 0,
+                    "defect_quantity": 0,
+                    "dhu": Decimal("0"),
+                    "hourly_efficiency": Decimal("0"),
+                    "manpower": 0,
+                    "available_minutes": Decimal("0"),
+                    "produced_minutes": Decimal("0"),
+                    "hourly_rows": [],
+                },
+            )
+            hourly_planned_output = Decimal("0")
+            if manpower_entry:
+                hourly_planned_output = calc.hourly_target(
+                    manpower_entry.manpower,
+                    check.article.sam,
+                    planned_efficiency,
+                )
+            hour_payload = {
+                "check_hour": check.check_hour,
+                "shift_name": check.shift_name or "Unassigned",
+                "target_output": hourly_planned_output,
+                "actual_output": check.inspected_quantity,
+                "defect_quantity": defect_total,
+                "dhu": (Decimal(defect_total) / Decimal(check.inspected_quantity or 0) * Decimal("100")) if check.inspected_quantity else Decimal("0"),
+                "hourly_efficiency": (Decimal(check.inspected_quantity or 0) / hourly_planned_output * Decimal("100")) if hourly_planned_output else Decimal("0"),
+                "manpower": manpower,
+                "available_minutes": Decimal(manpower) * Decimal("60") if manpower else Decimal("0"),
+                "produced_minutes": produced_minutes,
+            }
+            line["hourly_rows"].append(hour_payload)
+            target_key = (check.production_line_id, check.check_date, check.shift_name or "Unassigned")
+            if target_key not in counted_line_targets:
+                line["target_output"] += target_output
+                counted_line_targets.add(target_key)
+            line["actual_output"] += check.inspected_quantity
+            line["defect_quantity"] += defect_total
+            if line["actual_output"]:
+                line["dhu"] = (Decimal(line["defect_quantity"]) / Decimal(line["actual_output"]) * Decimal("100"))
+
+            if manpower_entry:
+                line["manpower"] = manpower_entry.manpower
+                line["available_minutes"] = Decimal(manpower_entry.manpower) * Decimal(manpower_entry.working_minutes)
+                line["produced_minutes"] = sum(
+                    Decimal(hour["produced_minutes"]) for hour in line["hourly_rows"]
+                )
+                if line["available_minutes"]:
+                    line["hourly_efficiency"] = (line["produced_minutes"] / line["available_minutes"] * Decimal("100"))
+            else:
+                line["manpower"] = 0
+                line["available_minutes"] = Decimal("0")
+                line["produced_minutes"] = sum(
+                    Decimal(hour["produced_minutes"]) for hour in line["hourly_rows"]
+                )
+                line["hourly_efficiency"] = Decimal("0")
+
+        context["line_summary_report"] = list(line_summary_by_line.values())
+
         qa_summary = self.get_qa_summary(selected_factory_id=selected_factory_id, date_from=date_from, date_to=date_to)
         qa_daily = qa_summary["daily"]
         if qa_daily:
-            _, qa_daily_detail, _ = self.get_qa_reporting_data(
+            qa_line_output, qa_daily_detail, qa_forecast = self.get_qa_reporting_data(
                 selected_factory_id=selected_factory_id,
                 date_from=date_from,
                 date_to=date_to,
                 selected_style_id=selected_style_id,
             )
+            qa_metrics = {}
+            for row in qa_daily_detail:
+                metric = qa_metrics.setdefault((row["date"], row["shift"]), {
+                    "available_minutes": Decimal("0"),
+                    "produced_minutes": Decimal("0"),
+                })
+                metric["available_minutes"] += row["available_minutes"]
+                metric["produced_minutes"] += row["produced_minutes"]
+            context["qa_daily_summary"] = []
+            for summary_row in qa_daily:
+                metric = qa_metrics.get((summary_row["check_date"], summary_row["shift_name"]))
+                available = metric["available_minutes"] if metric else Decimal("0")
+                produced = metric["produced_minutes"] if metric else Decimal("0")
+                context["qa_daily_summary"].append({
+                    "date": summary_row["check_date"],
+                    "shift": summary_row["shift_name"] or "Unassigned",
+                    "inspected": summary_row["total_inspected"] or 0,
+                    "defects": summary_row["total_defects"] or 0,
+                    "dhu": (Decimal(summary_row["total_defects"] or 0) / Decimal(summary_row["total_inspected"]) * 100)
+                    if summary_row["total_inspected"] else Decimal("0"),
+                    "efficiency": (produced / available * 100) if available else Decimal("0"),
+                })
             daily_efficiency_data = {}
             for row in qa_daily_detail:
                 daily = daily_efficiency_data.setdefault(row["date"], {
@@ -439,12 +672,86 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             ) if total_available_minutes else 0
             context["qa_defect_breakdown"] = qa_summary["defect_breakdown"]
             context["quality_source"] = "QA"
+            context["line_output"] = qa_line_output
+            context["forecast_assignments"] = qa_forecast
+
+            try:
+                selected_date_start = datetime.fromisoformat(date_from).date() if date_from else timezone.localdate()
+                selected_date_end = datetime.fromisoformat(date_to).date() if date_to else selected_date_start
+            except ValueError:
+                selected_date_start = timezone.localdate()
+                selected_date_end = timezone.localdate()
+            selected_dates = []
+            current_date = selected_date_start
+            while current_date <= selected_date_end:
+                selected_dates.append(current_date)
+                current_date += timedelta(days=1)
+            qa_rows_by_date = {}
+            for row in qa_daily_detail:
+                qa_rows_by_date.setdefault(row["date"], []).append(row)
+
+            fallback_by_date = {}
+            fallback_detail_rows = entries.values(
+                "production_date",
+                "assignment__production_line__line_name",
+                "assignment__production_order__article__article_code",
+            ).annotate(
+                total_available_minutes=Sum("available_minutes"),
+                total_produced_minutes=Sum("produced_minutes"),
+                target_output=Sum("target_output"),
+                actual_output=Sum("actual_output"),
+                manpower=Sum("actual_manpower"),
+                defect_pieces=Sum("defect_pieces"),
+                planned_productive_minutes=Sum(
+                    ExpressionWrapper(
+                        F("available_minutes") * F("planned_efficiency"),
+                        output_field=DecimalField(max_digits=14, decimal_places=2),
+                    )
+                ),
+                gain_loss_minutes=Sum("gain_loss_minutes"),
+            ).order_by("production_date", "assignment__production_line__line_name", "assignment__production_order__article__article_code")
+            for row in fallback_detail_rows:
+                available = Decimal(row["total_available_minutes"] or 0)
+                produced = Decimal(row["total_produced_minutes"] or 0)
+                planned_minutes = Decimal(row["planned_productive_minutes"] or 0)
+                planned_efficiency = planned_minutes / available * 100 if available else Decimal("0")
+                actual_output = Decimal(row["actual_output"] or 0)
+                target_output = Decimal(row["target_output"] or 0)
+                row_payload = {
+                    "date": row["production_date"],
+                    "line": row["assignment__production_line__line_name"],
+                    "shift": "Production",
+                    "article": row["assignment__production_order__article__article_code"],
+                    "manpower": row["manpower"] or 0,
+                    "available_minutes": available,
+                    "produced_minutes": produced,
+                    "planned_efficiency": planned_efficiency,
+                    "actual_efficiency": (produced / available * 100) if available else Decimal("0"),
+                    "daily_efficiency": (produced / available * 100) if available else Decimal("0"),
+                    "target_output": target_output,
+                    "actual_output": actual_output,
+                    "defect_pieces": row["defect_pieces"] or 0,
+                    "dhu": (Decimal(row["defect_pieces"] or 0) / actual_output * 100) if actual_output else Decimal("0"),
+                    "difference": actual_output - target_output,
+                    "gain_loss_minutes": row["gain_loss_minutes"] or 0,
+                    "gain_loss_efficiency": ((produced / available * 100) if available else Decimal("0")) - planned_efficiency,
+                }
+                fallback_by_date.setdefault(row["production_date"], []).append(row_payload)
+
+            merged_detail = []
+            for day in selected_dates:
+                merged_detail.extend(qa_rows_by_date.get(day, []))
+                if day not in qa_rows_by_date and day in fallback_by_date:
+                    merged_detail.extend(fallback_by_date[day])
+            context["daily_detail"] = merged_detail
         else:
+            context["qa_daily_summary"] = []
             daily = (
                 entries.values("production_date")
                 .annotate(
                     total_output=Sum("actual_output"),
-                    avg_efficiency=Avg("actual_efficiency"),
+                    total_produced_minutes=Sum("produced_minutes"),
+                    total_available_minutes=Sum("available_minutes"),
                     total_gain_loss=Sum("gain_loss_minutes"),
                 )
                 .order_by("production_date")
@@ -452,7 +759,11 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
 
             labels = [row["production_date"].strftime("%d-%b") for row in daily]
             output_series = [float(row["total_output"] or 0) for row in daily]
-            efficiency_series = [round(float(row["avg_efficiency"] or 0) * 100, 2) for row in daily]
+            efficiency_series = [
+                round(float(row["total_produced_minutes"] / row["total_available_minutes"] * 100), 2)
+                if row["total_available_minutes"] else 0
+                for row in daily
+            ]
 
             context["chart_labels"] = json.dumps(labels)
             context["chart_output_series"] = json.dumps(output_series)
@@ -463,7 +774,11 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             context["kpi_total_output"] = total_output
             context["kpi_total_defects"] = total_defects
             context["kpi_dhu"] = round(dhu, 2)
-            context["kpi_avg_efficiency"] = round(sum(efficiency_series) / len(efficiency_series), 2) if efficiency_series else 0
+            total_produced_minutes = sum(Decimal(row["total_produced_minutes"] or 0) for row in daily)
+            total_available_minutes = sum(Decimal(row["total_available_minutes"] or 0) for row in daily)
+            context["kpi_avg_efficiency"] = round(
+                float(total_produced_minutes / total_available_minutes * 100), 2
+            ) if total_available_minutes else 0
             context["qa_defect_breakdown"] = []
             context["quality_source"] = "Production"
 
@@ -496,41 +811,47 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             actual_output=Sum("actual_output"),
             manpower=Sum("actual_manpower"),
             defect_pieces=Sum("defect_pieces"),
-            average_efficiency=Avg("actual_efficiency"),
-            average_planned_efficiency=Avg("planned_efficiency"),
+            planned_productive_minutes=Sum(
+                ExpressionWrapper(
+                    F("available_minutes") * F("planned_efficiency"),
+                    output_field=DecimalField(max_digits=14, decimal_places=2),
+                )
+            ),
             gain_loss_minutes=Sum("gain_loss_minutes"),
         ).order_by(
             "-production_date",
             "assignment__production_line__line_name",
             "assignment__production_order__article__article_code",
         )
-        context["daily_detail"] = []
-        for row in daily_detail_rows:
-            available = Decimal(row["total_available_minutes"] or 0)
-            produced = Decimal(row["total_produced_minutes"] or 0)
-            daily_efficiency = (produced / available * 100) if available else Decimal("0")
-            actual_efficiency = Decimal(row["average_efficiency"] or 0) * 100
-            planned_efficiency = Decimal(row["average_planned_efficiency"] or 0) * 100
-            target_output = Decimal(row["target_output"] or 0)
-            actual_output = Decimal(row["actual_output"] or 0)
-            context["daily_detail"].append({
-                "date": row["production_date"],
-                "line": row["assignment__production_line__line_name"],
-                "article": row["assignment__production_order__article__article_code"],
-                "manpower": row["manpower"] or 0,
-                "available_minutes": available,
-                "produced_minutes": produced,
-                "planned_efficiency": planned_efficiency,
-                "actual_efficiency": actual_efficiency,
-                "daily_efficiency": daily_efficiency,
-                "target_output": target_output,
-                "actual_output": actual_output,
-                "defect_pieces": row["defect_pieces"] or 0,
-                "dhu": (Decimal(row["defect_pieces"] or 0) / actual_output * 100) if actual_output else Decimal("0"),
-                "difference": actual_output - target_output,
-                "gain_loss_minutes": row["gain_loss_minutes"] or 0,
-                "gain_loss_efficiency": daily_efficiency - planned_efficiency,
-            })
+        if not (qa_daily and context.get("daily_detail")):
+            context["daily_detail"] = []
+            for row in daily_detail_rows:
+                available = Decimal(row["total_available_minutes"] or 0)
+                produced = Decimal(row["total_produced_minutes"] or 0)
+                daily_efficiency = (produced / available * 100) if available else Decimal("0")
+                actual_efficiency = produced / available * 100 if available else Decimal("0")
+                planned_minutes = Decimal(row["planned_productive_minutes"] or 0)
+                planned_efficiency = planned_minutes / available * 100 if available else Decimal("0")
+                target_output = Decimal(row["target_output"] or 0)
+                actual_output = Decimal(row["actual_output"] or 0)
+                context["daily_detail"].append({
+                    "date": row["production_date"],
+                    "line": row["assignment__production_line__line_name"],
+                    "article": row["assignment__production_order__article__article_code"],
+                    "manpower": row["manpower"] or 0,
+                    "available_minutes": available,
+                    "produced_minutes": produced,
+                    "planned_efficiency": planned_efficiency,
+                    "actual_efficiency": actual_efficiency,
+                    "daily_efficiency": daily_efficiency,
+                    "target_output": target_output,
+                    "actual_output": actual_output,
+                    "defect_pieces": row["defect_pieces"] or 0,
+                    "dhu": (Decimal(row["defect_pieces"] or 0) / actual_output * 100) if actual_output else Decimal("0"),
+                    "difference": actual_output - target_output,
+                    "gain_loss_minutes": row["gain_loss_minutes"] or 0,
+                    "gain_loss_efficiency": daily_efficiency - planned_efficiency,
+                })
 
         forecast_entries = self.get_filtered_entries()
         # Apply style filter to forecast entries (same filter as main entries)
@@ -584,9 +905,8 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
         context["forecast_days_to_complete"] = max(forecast_days_values) if forecast_days_values else None
         context["forecast_assignments"] = forecast_rows
 
-        # QA is the live output source when IE has supplied manpower but no
-        # manual DailyProductionEntry exists yet.
-        if not entries.exists():
+        # QA is the live output source whenever checks exist in the selected range.
+        if qa_daily:
             qa_line_output, qa_daily_detail, qa_forecast = self.get_qa_reporting_data(
                 selected_factory_id=selected_factory_id,
                 date_from=date_from,
@@ -595,7 +915,6 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             )
             if qa_line_output or qa_daily_detail:
                 context["line_output"] = qa_line_output
-                context["daily_detail"] = qa_daily_detail
                 context["forecast_assignments"] = qa_forecast
                 context["styles"] = Article.objects.filter(
                     hourly_line_checks__factory_id=selected_factory_id,
@@ -1152,6 +1471,8 @@ class ShiftManagementView(LoginRequiredMixin, TemplateView):
         shift_name = (request.POST.get("shift_name") or "").strip()
         start_time = request.POST.get("start_time")
         end_time = request.POST.get("end_time")
+        lunch_break_start = request.POST.get("lunch_break_start")
+        lunch_break_end = request.POST.get("lunch_break_end")
         if not shift_name or not start_time or not end_time:
             from django.contrib import messages
 
@@ -1166,57 +1487,53 @@ class ShiftManagementView(LoginRequiredMixin, TemplateView):
 
             messages.error(request, "Shift hours must be whole numbers.")
             return redirect("dashboard:shift_management")
-        if not 1 <= standard_hours <= 8 or not 0 <= overtime_hours <= 8:
+        if not 1 <= standard_hours <= 12 or not 0 <= overtime_hours <= 8:
             from django.contrib import messages
 
-            messages.error(request, "Regular hours must be 1-8 and overtime hours must be 0-8.")
+            messages.error(request, "Regular hours must be 1-12 and overtime hours must be 0-8.")
             return redirect("dashboard:shift_management")
 
-        hourly_schedule = []
-        for hour in range(1, 9):
-            start = request.POST.get(f"hour_{hour}_start") or ""
-            end = request.POST.get(f"hour_{hour}_end") or ""
-            break_start = request.POST.get(f"hour_{hour}_break_start") or ""
-            break_end = request.POST.get(f"hour_{hour}_break_end") or ""
+        if lunch_break_start and lunch_break_end:
             try:
-                if start and end and time.fromisoformat(start) >= time.fromisoformat(end):
-                    raise ValueError
-                if bool(break_start) != bool(break_end) or (break_start and time.fromisoformat(break_start) >= time.fromisoformat(break_end)):
+                if time.fromisoformat(lunch_break_start) >= time.fromisoformat(lunch_break_end):
                     raise ValueError
             except ValueError:
                 from django.contrib import messages
 
-                messages.error(request, f"Check the start, end, and break times for Hour {hour}.")
+                messages.error(request, "Lunch break start must be earlier than lunch break end.")
                 return redirect("dashboard:shift_management")
-            hourly_schedule.append({"hour": hour, "start": start, "end": end, "break_start": break_start, "break_end": break_end})
 
-        breaks_payload = request.POST.get("break_blocks") or "[]"
-        try:
-            breaks_value = json.loads(breaks_payload) if breaks_payload else []
-        except json.JSONDecodeError:
-            breaks_value = []
+        temp_shift = FactoryShift(
+            factory=factory,
+            shift_name=shift_name,
+            start_time=start_time,
+            end_time=end_time,
+            standard_hours=standard_hours,
+            overtime_hours=overtime_hours,
+            overtime_start_time=request.POST.get("overtime_start_time") or None,
+            active=request.POST.get("active") == "on",
+            assigned_by=request.user,
+        )
+        hourly_schedule = temp_shift.build_hourly_schedule(
+            start_time=start_time,
+            end_time=end_time,
+            lunch_break_start=lunch_break_start,
+            lunch_break_end=lunch_break_end,
+        )
 
-        if isinstance(breaks_value, list):
-            break_items = []
-            for block in breaks_value:
-                if not isinstance(block, dict):
-                    continue
-                start = (block.get("start") or "").strip()
-                end = (block.get("end") or "").strip()
-                label = (block.get("label") or "Break").strip() or "Break"
-                if start and end:
-                    break_items.append({"label": label, "start": start, "end": end})
-        else:
-            break_items = []
+        if not hourly_schedule:
+            from django.contrib import messages
+
+            messages.error(request, "The shift schedule could not be generated. Please review the selected times.")
+            return redirect("dashboard:shift_management")
 
         description = request.POST.get("description") or ""
-        if break_items:
-            for block in break_items:
-                for schedule in hourly_schedule:
-                    if str(schedule["hour"]) == str(block.get("hour")):
-                        schedule["break_start"] = block["start"]
-                        schedule["break_end"] = block["end"]
-            description = json.dumps({"breaks": break_items}, ensure_ascii=True)
+        if lunch_break_start and lunch_break_end:
+            description = json.dumps({
+                "lunch_break": {"start": lunch_break_start, "end": lunch_break_end},
+                "overtime_start": request.POST.get("overtime_start_time") or "",
+                "overtime_hours": overtime_hours,
+            }, ensure_ascii=True)
 
         FactoryShift.objects.create(
             factory=factory,

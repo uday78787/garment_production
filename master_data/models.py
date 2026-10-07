@@ -105,6 +105,56 @@ class FactoryShift(TimeStampedModel):
     def total_shift_hours(self):
         return int(self.standard_hours + self.overtime_hours)
 
+    def build_hourly_schedule(self, start_time=None, end_time=None, lunch_break_start=None, lunch_break_end=None):
+        """Build a clean work-hour schedule with a lunch break and optional overtime."""
+        shift_start = self._coerce_time(start_time or self.start_time)
+        shift_end = self._coerce_time(end_time or self.end_time)
+        lunch_start = self._coerce_time(lunch_break_start)
+        lunch_end = self._coerce_time(lunch_break_end)
+
+        if shift_start is None or shift_end is None:
+            return []
+
+        regular_hours = max(int(self.standard_hours or 0), 1)
+        hours = []
+        current = datetime.combine(datetime.today().date(), shift_start)
+        for hour_number in range(1, regular_hours + 1):
+            hour_end = current + timedelta(hours=1)
+            slot = {
+                "hour": hour_number,
+                "start": current.strftime("%H:%M"),
+                "end": hour_end.strftime("%H:%M"),
+                "break_start": "",
+                "break_end": "",
+            }
+            if lunch_start and lunch_end and current.time() < lunch_end and hour_end.time() > lunch_start:
+                break_start = max(current.time(), lunch_start)
+                break_end = min(hour_end.time(), lunch_end)
+                if break_start < break_end:
+                    slot["break_start"] = break_start.strftime("%H:%M")
+                    slot["break_end"] = break_end.strftime("%H:%M")
+            hours.append(slot)
+            current = hour_end
+
+        overtime_start = self._coerce_time(self.overtime_start_time)
+        overtime_hours = max(int(self.overtime_hours or 0), 0)
+        if overtime_start and overtime_hours:
+            overtime_base = datetime.combine(datetime.today().date(), overtime_start)
+            for hour_number in range(regular_hours + 1, regular_hours + overtime_hours + 1):
+                slot_start = overtime_base + timedelta(hours=(hour_number - regular_hours - 1))
+                slot_end = slot_start + timedelta(hours=1)
+                hours.append({
+                    "hour": hour_number,
+                    "start": slot_start.strftime("%H:%M"),
+                    "end": slot_end.strftime("%H:%M"),
+                    "break_start": "",
+                    "break_end": "",
+                })
+
+        if not hours:
+            return [{"hour": 1, "start": shift_start.strftime("%H:%M"), "end": shift_end.strftime("%H:%M"), "break_start": "", "break_end": ""}]
+        return hours
+
     def shift_end_time(self, current_dt=None):
         now = timezone.localtime(current_dt) if current_dt else timezone.localtime()
         start_date = now.date()
@@ -165,8 +215,8 @@ class FactoryShift(TimeStampedModel):
         return hour_start, hour_end
 
     def current_hour_label(self, current_dt=None):
-        hour_start, hour_end = self.current_hour_window(current_dt)
-        return f"{hour_start.strftime('%H:%M')} - {hour_end.strftime('%H:%M')}"
+        status = self.current_schedule_status(current_dt)
+        return status["label"]
 
     def current_schedule_status(self, current_dt=None):
         """Return the configured hour number and break state for dashboard use."""

@@ -83,6 +83,116 @@
     </div>
 </div>
 
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <h5 class="card-title mb-0"><i class="fa-solid fa-chart-column"></i> Line Summary Report</h5>
+            <form method="get" class="d-flex align-items-center gap-2 flex-wrap">
+                {% if selected_style_id %}<input type="hidden" name="style" value="{{ selected_style_id }}">{% endif %}
+                <input type="hidden" name="date_from" value="{{ selected_date_from }}">
+                <input type="hidden" name="date_to" value="{{ selected_date_to }}">
+                <select name="line_summary_line" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option value="">All Lines</option>
+                    {% for line in line_summary_lines %}
+                    <option value="{{ line.pk }}" {% if selected_line_summary_line == line.pk %}selected{% endif %}>{{ line.line_name }}</option>
+                    {% endfor %}
+                </select>
+                <input type="date" name="line_summary_date" class="form-control form-control-sm" value="{{ selected_line_summary_date }}" onchange="this.form.submit()">
+            </form>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0 align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 70px;">Action</th>
+                        <th>Date</th>
+                        <th>Line</th>
+                        <th>Shift</th>
+                        <th class="text-end">Planned</th>
+                        <th class="text-end">Actual</th>
+                        <th class="text-end">Defects</th>
+                        <th class="text-end">DHU %</th>
+                        <th class="text-end">Eff %</th>
+                        <th class="text-end">Manpower</th>
+                        <th class="text-end">Avail Min</th>
+                        <th class="text-end">Produced Min</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in line_summary_report %}
+                    <tr class="table-light">
+                        <td>
+                            {% if row.hourly_rows %}
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#line-summary-details-{{ row.production_line_id }}-{{ row.summary_date|date:'Ymd' }}" aria-expanded="false" aria-controls="line-summary-details-{{ row.production_line_id }}-{{ row.summary_date|date:'Ymd' }}">
+                                +
+                            </button>
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ row.summary_date }}</td>
+                        <td>{{ row.production_line.line_name }}</td>
+                        <td>{{ row.shift_name|default:'-' }}</td>
+                        <td class="text-end">{{ row.target_output|floatformat:0 }}</td>
+                        <td class="text-end">{{ row.actual_output|floatformat:0 }}</td>
+                        <td class="text-end">{{ row.defect_quantity|floatformat:0 }}</td>
+                        <td class="text-end">{{ row.dhu|floatformat:2 }}%</td>
+                        <td class="text-end">{{ row.hourly_efficiency|floatformat:2 }}%</td>
+                        <td class="text-end">{{ row.manpower }}</td>
+                        <td class="text-end">{{ row.available_minutes|floatformat:2 }}</td>
+                        <td class="text-end">{{ row.produced_minutes|floatformat:2 }}</td>
+                    </tr>
+                    {% if row.hourly_rows %}
+                    <tr class="collapse" id="line-summary-details-{{ row.production_line_id }}-{{ row.summary_date|date:'Ymd' }}">
+                        <td colspan="12" class="p-0">
+                            <div class="p-3 bg-white border-top">
+                                <table class="table table-sm mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Hour</th>
+                                            <th class="text-end">Checked</th>
+                                            <th class="text-end">Passed</th>
+                                            <th class="text-end">Defectives</th>
+                                            <th class="text-end">Defects</th>
+                                            <th class="text-end">Repaired</th>
+                                            <th class="text-end">Rejects</th>
+                                            <th class="text-end">DHU</th>
+                                            <th class="text-end">Efficiency</th>
+                                            <th class="text-end">TMP</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for hour in row.hourly_rows %}
+                                        <tr>
+                                            <td>Hour {{ hour.check_hour }}</td>
+                                            <td class="text-end">{{ hour.actual_output|floatformat:0 }}</td>
+                                            <td class="text-end">{{ hour.actual_output|floatformat:0 }}</td>
+                                            <td class="text-end">{{ hour.defect_quantity|floatformat:0 }}</td>
+                                            <td class="text-end">{{ hour.defect_quantity|floatformat:0 }}</td>
+                                            <td class="text-end">{{ hour.defect_quantity|floatformat:0 }}</td>
+                                            <td class="text-end">0</td>
+                                            <td class="text-end">{{ hour.dhu|floatformat:2 }}%</td>
+                                            <td class="text-end">{{ hour.hourly_efficiency|floatformat:2 }}%</td>
+                                            <td class="text-end">{{ hour.manpower }}</td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr><td colspan="11" class="text-center text-muted">No hourly QA records for this line.</td></tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% empty %}
+                    <tr><td colspan="12" class="text-center text-muted">No line summary data is available for the selected date and line.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
 {% if qa_defect_breakdown %}
 <div class="card shadow-sm mb-4">
     <div class="card-body">
@@ -100,6 +210,31 @@
                         <td class="text-end">{{ defect.total_defects }}</td>
                     </tr>
                     {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if qa_daily_summary %}
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <h5 class="card-title"><i class="fa-solid fa-calendar-days"></i> QA Daily Shift Summary</h5>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead><tr><th>Date</th><th>Shift</th><th class="text-end">Total Inspection</th><th class="text-end">Defect Pcs</th><th class="text-end">DHU %</th><th class="text-end">Avg. Eff %</th></tr></thead>
+                <tbody>
+                {% for row in qa_daily_summary %}
+                <tr>
+                    <td>{{ row.date }}</td>
+                    <td>{{ row.shift }}</td>
+                    <td class="text-end">{{ row.inspected }}</td>
+                    <td class="text-end">{{ row.defects }}</td>
+                    <td class="text-end">{{ row.dhu|floatformat:2 }}%</td>
+                    <td class="text-end">{{ row.efficiency|floatformat:2 }}%</td>
+                </tr>
+                {% endfor %}
                 </tbody>
             </table>
         </div>
@@ -178,7 +313,7 @@
             <table class="table table-sm table-striped table-hover align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Date</th><th>Line</th><th>Article</th><th class="text-end">Manpower</th>
+                        <th>Date</th><th>Shift</th><th>Line</th><th>Article</th><th class="text-end">Manpower</th>
                         <th class="text-end">Available Min</th><th class="text-end">Produced Min</th>
                         <th class="text-end">Planned Eff %</th><th class="text-end">Actual Eff %</th>
                         <th class="text-end">Target</th><th class="text-end">Actual Production</th><th class="text-end">Defect Pcs</th><th class="text-end">DHU %</th>
@@ -189,6 +324,7 @@
                 {% for row in daily_detail %}
                 <tr>
                     <td>{{ row.date }}</td>
+                    <td>{{ row.shift|default:'-' }}</td>
                     <td>{{ row.line }}</td>
                     <td>{{ row.article }}</td>
                     <td class="text-end">{{ row.manpower }}</td>
@@ -204,7 +340,7 @@
                     <td class="text-end fw-bold {% if row.gain_loss_minutes > 0 %}text-success{% elif row.gain_loss_minutes < 0 %}text-danger{% else %}text-muted{% endif %}">{{ row.gain_loss_minutes|floatformat:2 }}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="14" class="text-center text-muted">No daily production data is available for the selected factory and style.</td></tr>
+                <tr><td colspan="15" class="text-center text-muted">No daily production data is available for the selected factory and style.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>

@@ -3,11 +3,12 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models import Sum
 from django.utils import timezone
 import secrets
 
 from common.models import TimeStampedModel
-from master_data.models import Article, Factory, ProductionLine
+from master_data.models import Article, Factory, ProductionLine, LineShiftManpower
 from planning.models import ProductionOrder
 
 
@@ -69,6 +70,109 @@ class DefectMaster(TimeStampedModel):
         return created
 
 
+class HourlyLineSummary(TimeStampedModel):
+    class Meta:
+        ordering = ["-summary_date", "production_line__line_name", "check_hour"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["factory", "production_line", "summary_date", "shift_name", "check_hour"],
+                name="unique_hourly_line_summary_per_day_shift_hour",
+            )
+        ]
+
+    factory = models.ForeignKey(Factory, on_delete=models.PROTECT, related_name="hourly_line_summaries")
+    production_line = models.ForeignKey(ProductionLine, on_delete=models.PROTECT, related_name="hourly_line_summaries")
+    production_order = models.ForeignKey(ProductionOrder, on_delete=models.PROTECT, related_name="hourly_line_summaries", null=True, blank=True)
+    article = models.ForeignKey(Article, on_delete=models.PROTECT, related_name="hourly_line_summaries")
+    summary_date = models.DateField()
+    shift_name = models.CharField(max_length=100, blank=True)
+    check_hour = models.PositiveIntegerField(default=1)
+    inspected_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    passed_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    defect_quantity = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    manpower = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    working_minutes = models.PositiveIntegerField(default=60, validators=[MinValueValidator(1)])
+    available_minutes = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"))
+    produced_minutes = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"))
+    actual_output = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    target_output = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"))
+    hourly_efficiency = models.DecimalField(max_digits=8, decimal_places=2, default=Decimal("0"))
+    dhu = models.DecimalField(max_digits=8, decimal_places=2, default=Decimal("0"))
+
+    def __str__(self):
+        return f"{self.summary_date} - {self.production_line} - {self.shift_name} - H{self.check_hour}"
+
+    @classmethod
+    def sync_from_check(cls, hourly_check):
+        from planning.services import calculations as calc
+        from planning.models import LineAssignment
+
+        manpower_qs = LineShiftManpower.objects.filter(
+            factory=hourly_check.factory,
+            production_line=hourly_check.production_line,
+            entry_date=hourly_check.check_date,
+        ).select_related("shift")
+        if hourly_check.shift_name:
+            manpower_qs = manpower_qs.filter(shift__shift_name=hourly_check.shift_name)
+        manpower_entry = manpower_qs.order_by("-entry_date", "-id").first()
+
+        if manpower_entry and manpower_entry.shift:
+            manpower = manpower_entry.manpower
+            working_minutes = manpower_entry.working_minutes or manpower_entry.shift.shift_minutes or 60
+        else:
+            manpower = 0
+            working_minutes = 60
+
+        defect_total = hourly_check.details.aggregate(total=Sum("defect_quantity"))["total"] or 0
+        available_minutes = Decimal(manpower) * Decimal(working_minutes)
+        produced_minutes = Decimal(hourly_check.inspected_quantity or 0) * Decimal(hourly_check.article.sam)
+        hourly_efficiency = (produced_minutes / available_minutes * Decimal("100")) if available_minutes else Decimal("0")
+        dhu = (Decimal(defect_total) / Decimal(hourly_check.inspected_quantity or 0) * Decimal("100")) if hourly_check.inspected_quantity else Decimal("0")
+
+        planned_efficiency = Decimal("0")
+        target_output = Decimal("0")
+        assignment = LineAssignment.objects.filter(
+            production_line=hourly_check.production_line,
+            production_order=hourly_check.production_order,
+        ).first()
+        if assignment:
+            day_number = max((hourly_check.check_date - assignment.start_date).days + 1, 1)
+            planned_efficiency = calc.planned_efficiency(
+                assignment.start_efficiency,
+                assignment.daily_efficiency_growth,
+                day_number,
+                assignment.max_efficiency,
+            )
+            target_output = calc.target_output(
+                calc.planned_productive_minutes(available_minutes, planned_efficiency),
+                hourly_check.article.sam,
+            ) if available_minutes else Decimal("0")
+
+        summary, _ = cls.objects.update_or_create(
+            factory=hourly_check.factory,
+            production_line=hourly_check.production_line,
+            summary_date=hourly_check.check_date,
+            shift_name=hourly_check.shift_name,
+            check_hour=hourly_check.check_hour,
+            defaults={
+                "production_order": hourly_check.production_order,
+                "article": hourly_check.article,
+                "inspected_quantity": hourly_check.inspected_quantity,
+                "passed_quantity": hourly_check.passed_quantity,
+                "defect_quantity": defect_total,
+                "manpower": manpower,
+                "working_minutes": working_minutes,
+                "available_minutes": available_minutes,
+                "produced_minutes": produced_minutes,
+                "actual_output": hourly_check.inspected_quantity,
+                "target_output": target_output,
+                "hourly_efficiency": hourly_efficiency,
+                "dhu": dhu,
+            },
+        )
+        return summary
+
+
 class HourlyLineCheck(TimeStampedModel):
     class Meta:
         ordering = ["-check_date", "-check_hour", "-created_at"]
@@ -98,6 +202,13 @@ class HourlyLineCheck(TimeStampedModel):
             return 0
         return float((Decimal(self.total_defects) / Decimal(self.inspected_quantity)) * Decimal("100"))
 
+    def sync_hourly_summary(self):
+        return HourlyLineSummary.sync_from_check(self)
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self.sync_hourly_summary()
+
     def __str__(self):
         return f"{self.check_date} - {self.production_line} - H{self.check_hour}"
 
@@ -124,7 +235,14 @@ class HourlyLineCheckDetail(TimeStampedModel):
             while code is None or type(self).objects.filter(tracking_code=code).exists():
                 code = str(secrets.randbelow(900000) + 100000)
             self.tracking_code = code
-        return super().save(*args, **kwargs)
+        saved = super().save(*args, **kwargs)
+        self.hourly_check.sync_hourly_summary()
+        return saved
+
+    def delete(self, *args, **kwargs):
+        deleted = super().delete(*args, **kwargs)
+        self.hourly_check.sync_hourly_summary()
+        return deleted
 
     def __str__(self):
         return f"{self.hourly_check} - {self.defect.defect_code}"
