@@ -1,12 +1,16 @@
 from datetime import datetime
+from mimetypes import guess_type
+from urllib.parse import quote
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponse
-from django.shortcuts import redirect, render
+from django.http import FileResponse, HttpResponse
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.views.decorators.http import require_GET
 
 from master_data.models import Article, Factory, FactoryShift, ProductionLine
 from planning.models import ProductionOrder
@@ -21,7 +25,11 @@ from .models import (
     QualityInspection,
 )
 from .reports import build_quality_excel_response
-from .permissions import quality_scope
+from .permissions import (
+    ensure_quality_access,
+    quality_scope,
+    user_can_access_quality_line,
+)
 
 
 def _quality_querysets(request):
@@ -32,6 +40,40 @@ def _quality_querysets(request):
         production_orders.select_related("article").order_by("-delivery_date"),
         articles.order_by("article_code"),
     )
+
+
+@require_GET
+@login_required
+def defect_image(request, image_path):
+    ensure_quality_access(request.user)
+    detail = get_object_or_404(
+        HourlyLineCheckDetail.objects.select_related(
+            "hourly_check__production_line",
+        ),
+        defect_image=image_path,
+    )
+    if not user_can_access_quality_line(
+        request.user, detail.hourly_check.production_line
+    ):
+        raise PermissionDenied("You do not have access to this production line.")
+
+    content_type = guess_type(detail.defect_image.name)[0] or "application/octet-stream"
+    if settings.DEBUG:
+        response = FileResponse(
+            detail.defect_image.open("rb"),
+            content_type=content_type,
+        )
+        response["Cache-Control"] = "private, no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    response = HttpResponse()
+    protected_path = quote(detail.defect_image.name, safe="/")
+    response["X-Accel-Redirect"] = f"/_protected_media/{protected_path}"
+    response["Content-Type"] = content_type
+    response["Cache-Control"] = "private, no-store"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @login_required

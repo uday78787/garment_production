@@ -4,6 +4,9 @@ venv/
 .venv/
 .git/
 .env
+.env.*
+!.env.example
+!.env.uat.example
 db.sqlite3
 staticfiles/
 media/

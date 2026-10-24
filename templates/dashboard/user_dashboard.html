@@ -91,6 +91,7 @@
 </div>
 {% block extra_js %}
 <script>
+(() => {
 const labels = {{ chart_labels|safe }};
 new Chart(document.getElementById('outputChart'), {
     type: 'bar',
@@ -102,5 +103,6 @@ new Chart(document.getElementById('efficiencyChart'), {
     data: { labels: labels, datasets: [{ label: 'Efficiency %', data: {{ chart_efficiency_series|safe }}, borderColor: '#198754', tension: 0.3 }] },
     options: { responsive: true }
 });
+})();
 </script>
 {% endblock %}

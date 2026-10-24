@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+import json
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -71,6 +72,17 @@ class DailyDetailExportTests(TestCase):
 
         self.assertContains(response, "date_from=2026-09-10&amp;date_to=2026-09-11&amp;style=7")
 
+    def test_admin_and_user_dashboards_offer_manual_refresh_and_background_sync(self):
+        for dashboard_name in ("dashboard:admin_dashboard", "dashboard:user_dashboard"):
+            with self.subTest(dashboard=dashboard_name):
+                response = self.client.get(reverse(dashboard_name))
+                self.assertContains(response, 'id="dashboard-refresh-button"')
+                self.assertContains(response, "Dashboard data syncs every 10 seconds")
+                self.assertContains(response, "dashboardSyncIntervalMs = 10000")
+                self.assertContains(response, 'id="dashboard-live-content"')
+                self.assertContains(response, 'id="dashboard-live-scripts"')
+                self.assertNotContains(response, "Auto-refreshing in")
+
     def test_admin_dashboard_defaults_to_current_day_for_live_data(self):
         today = timezone.localdate()
         yesterday = today - timedelta(days=1)
@@ -120,6 +132,68 @@ class DailyDetailExportTests(TestCase):
         self.assertTrue(all(row["date"] == today for row in response.context["daily_detail"]))
         self.assertEqual(float(response.context["kpi_total_output"]), 120.0)
 
+    def test_admin_daily_output_chart_has_a_separate_series_for_each_line(self):
+        today = timezone.localdate()
+        first_assignment = LineAssignment.objects.select_related(
+            "production_line", "production_order"
+        ).first()
+        second_line = ProductionLine.objects.create(
+            factory=self.factory,
+            line_name="Line 2",
+            capacity_manpower=30,
+        )
+        second_article = Article.objects.create(
+            article_code="ART-L2",
+            article_name="Line 2 Article",
+            sam=Decimal("22"),
+        )
+        second_order = ProductionOrder.objects.create(
+            order_number="PO-L2",
+            article=second_article,
+            order_quantity=1000,
+            customer_name="Customer",
+            delivery_date=today + timedelta(days=30),
+        )
+        second_assignment = LineAssignment.objects.create(
+            production_line=second_line,
+            production_order=second_order,
+            start_date=today,
+            default_manpower=10,
+            working_minutes_per_operator=480,
+            start_efficiency=Decimal("0.25"),
+            daily_efficiency_growth=Decimal("0.05"),
+            max_efficiency=Decimal("0.60"),
+        )
+        for assignment, output in ((first_assignment, 125), (second_assignment, 75)):
+            DailyProductionEntry.objects.create(
+                assignment=assignment,
+                production_date=today,
+                actual_manpower=10,
+                working_minutes=60,
+                actual_output=output,
+                planned_efficiency=Decimal("0.50"),
+                created_by=self.user,
+                updated_by=self.user,
+            )
+
+        response = self.client.get(reverse("dashboard:admin_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        datasets = json.loads(response.context["chart_line_datasets"])
+        chart_labels = json.loads(response.context["chart_labels"])
+        self.assertEqual([dataset["label"] for dataset in datasets], ["Line 1", "Line 2"])
+        today_index = chart_labels.index(today.strftime("%d-%b"))
+        self.assertEqual([dataset["data"][today_index] for dataset in datasets], [125.0, 75.0])
+        self.assertEqual(sum(dataset["data"][today_index] for dataset in datasets), response.context["kpi_total_output"])
+        efficiency_series = json.loads(response.context["chart_efficiency_series"])
+        self.assertEqual(efficiency_series[today_index], response.context["kpi_avg_efficiency"])
+        self.assertContains(response, "type: 'bar'")
+        self.assertContains(response, "label: 'Average Efficiency'")
+        self.assertContains(response, "type: 'line'")
+        self.assertContains(response, "pointRadius: 4")
+        self.assertContains(response, "Efficiency (%)")
+        self.assertContains(response, "context.parsed.y}%")
+
     def test_admin_dashboard_current_hour_uses_hour_number_label(self):
         factory = Factory.objects.create(name="Factory 2", code="FAC2")
         ProductionLine.objects.create(factory=factory, line_name="Line 2", capacity_manpower=30)
@@ -166,6 +240,10 @@ class DailyDetailExportTests(TestCase):
         self.assertEqual(schedule[3]["break_end"], "12:30")
         self.assertEqual(schedule[-1]["end"], "20:30")
         self.assertEqual(shift.total_shift_hours, 11)
+
+    def test_factory_shift_rejects_malformed_time_values(self):
+        self.assertIsNone(FactoryShift._coerce_time("not-a-time"))
+        self.assertIsNone(FactoryShift._coerce_time(object()))
 
     def test_qa_dashboard_counts_ie_manpower_once_per_line_shift(self):
         line = self.factory.production_lines.first()

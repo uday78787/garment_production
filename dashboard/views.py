@@ -19,7 +19,7 @@ from pathlib import Path
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.conf import settings
-from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Sum
+from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Min, Sum
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 from django.shortcuts import redirect
@@ -135,6 +135,36 @@ def _daily_detail_rows(request):
         "Total Target": sum((row["Target"] for row in rows), Decimal("0")),
     }
     return rows, summary
+
+
+def _build_line_output_chart(rows):
+    output_by_line = {}
+    dates = set()
+    for row in rows:
+        day = row["date"]
+        line_name = row["line"]
+        dates.add(day)
+        line_outputs = output_by_line.setdefault(line_name, {})
+        line_outputs[day] = line_outputs.get(day, Decimal("0")) + Decimal(row["output"] or 0)
+
+    sorted_dates = sorted(dates)
+    labels = [day.strftime("%d-%b") for day in sorted_dates]
+    palette = ["#0d6efd", "#198754", "#dc3545", "#fd7e14", "#6f42c1", "#0dcaf0"]
+    datasets = []
+    for index, (line_name, line_outputs) in enumerate(sorted(output_by_line.items())):
+        color = palette[index % len(palette)]
+        datasets.append({
+            "label": line_name,
+            "data": [
+                float(line_outputs[day]) if day in line_outputs else None
+                for day in sorted_dates
+            ],
+            "borderColor": color,
+            "backgroundColor": color,
+            "tension": 0.25,
+            "spanGaps": False,
+        })
+    return json.dumps(labels), json.dumps(datasets)
 
 
 @admin_required
@@ -649,17 +679,25 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                 daily["produced_minutes"] += row["produced_minutes"]
                 daily["available_minutes"] += row["available_minutes"]
             dates = sorted(daily_efficiency_data)
-            labels = [day.strftime("%d-%b") for day in dates]
             output_series = [float(daily_efficiency_data[day]["actual_output"]) for day in dates]
             efficiency_series = [
                 round(float(data["produced_minutes"] / data["available_minutes"] * 100), 2)
                 if data["available_minutes"] else 0
                 for data in (daily_efficiency_data[day] for day in dates)
             ]
+            chart_labels, chart_line_datasets = _build_line_output_chart(
+                {
+                    "date": row["date"],
+                    "line": row["line"],
+                    "output": row["actual_output"],
+                }
+                for row in qa_daily_detail
+            )
             total_output = sum(output_series)
             total_defects = qa_summary["total_defects"]
             dhu = (total_defects / total_output * 100) if total_output else 0
-            context["chart_labels"] = json.dumps(labels)
+            context["chart_labels"] = chart_labels
+            context["chart_line_datasets"] = chart_line_datasets
             context["chart_output_series"] = json.dumps(output_series)
             context["chart_efficiency_series"] = json.dumps(efficiency_series)
             context["kpi_total_output"] = total_output
@@ -757,7 +795,19 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                 .order_by("production_date")
             )
 
-            labels = [row["production_date"].strftime("%d-%b") for row in daily]
+            chart_labels, chart_line_datasets = _build_line_output_chart(
+                {
+                    "date": row["production_date"],
+                    "line": row["assignment__production_line__line_name"],
+                    "output": row["total_output"],
+                }
+                for row in entries.values(
+                    "production_date",
+                    "assignment__production_line__line_name",
+                ).annotate(
+                    total_output=Sum("actual_output"),
+                ).order_by("production_date", "assignment__production_line__line_name")
+            )
             output_series = [float(row["total_output"] or 0) for row in daily]
             efficiency_series = [
                 round(float(row["total_produced_minutes"] / row["total_available_minutes"] * 100), 2)
@@ -765,7 +815,8 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                 for row in daily
             ]
 
-            context["chart_labels"] = json.dumps(labels)
+            context["chart_labels"] = chart_labels
+            context["chart_line_datasets"] = chart_line_datasets
             context["chart_output_series"] = json.dumps(output_series)
             context["chart_efficiency_series"] = json.dumps(efficiency_series)
             total_output = sum(output_series)
@@ -984,22 +1035,36 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         user = self.request.user
         profile = getattr(user, "profile", None)
-        lines = profile.assigned_lines.select_related("factory").order_by("factory__name", "line_name") if profile else []
+        lines = list(profile.assigned_lines.select_related("factory").order_by("factory__name", "line_name")) if profile else []
         context["assigned_lines"] = lines
+        context["primary_line"] = lines[0] if lines else None
         context["factory_name"] = profile.factory.name if profile and profile.factory else "Line Access"
         context["qa_user"] = user.get_full_name() or user.get_username()
 
-        factory = profile.factory if profile else None
         running_articles = Article.objects.filter(
             orders__status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
-            orders__assignments__production_line__factory=factory,
-        ).distinct().order_by("article_code") if factory else Article.objects.none()
-        selected_article_id = self.request.GET.get("article") or self.request.session.get("qa_article_id")
+            orders__assignments__production_line__in=lines,
+        ).annotate(
+            qa_line_id=Min("orders__assignments__production_line_id")
+        ).distinct().order_by("article_code") if lines else Article.objects.none()
+        if "article" in self.request.GET:
+            selected_article_id = self.request.GET.get("article")
+        else:
+            selected_article_id = self.request.session.get("qa_article_id")
         selected_article = running_articles.filter(pk=selected_article_id).first() if selected_article_id else None
         if selected_article:
             self.request.session["qa_article_id"] = selected_article.pk
+        else:
+            self.request.session.pop("qa_article_id", None)
+        selected_line = next(
+            (line for line in lines if selected_article and line.pk == selected_article.qa_line_id),
+            None,
+        )
+        context["selected_line"] = selected_line
+        context["selected_line_id"] = selected_line.pk if selected_line else None
         context["running_articles"] = running_articles
         context["selected_article"] = selected_article
+        factory = selected_line.factory if selected_line else (profile.factory if profile else None)
         current_shift = FactoryShift.get_active_shift_for_factory(factory) if factory else None
         context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
         schedule_status = current_shift.current_schedule_status() if current_shift else None
@@ -1009,7 +1074,11 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
             production_line__in=profile.assigned_lines.all(),
             check_date=timezone.localdate(),
         ) if profile else HourlyLineCheck.objects.none()
-        dashboard_checks = today_checks
+        dashboard_checks = (
+            today_checks.filter(article=selected_article)
+            if selected_article
+            else today_checks
+        )
         current_hour_number = schedule_status["number"] if schedule_status else timezone.localtime().hour
         current_hour_checks = dashboard_checks.filter(
             check_hour=current_hour_number,
@@ -1062,6 +1131,8 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
             )
             .order_by("hourly_check__check_date", "hourly_check__check_hour", "defect__defect_code")
         ) if profile else HourlyLineCheckDetail.objects.none()
+        if selected_article:
+            repair_details = repair_details.filter(hourly_check__article=selected_article)
         context["repair_queue"] = [
             {
                 "id": detail.pk,
@@ -1184,7 +1255,7 @@ def qa_mark_defect(request):
     article = Article.objects.filter(
         pk=article_id,
         orders__status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
-        orders__assignments__production_line__factory=line.factory,
+        orders__assignments__production_line=line,
     ).distinct().first() if article_id else None
     if article is None and article_id is None:
         legacy_order = ProductionOrder.objects.filter(
@@ -1209,7 +1280,7 @@ def qa_mark_defect(request):
         order = ProductionOrder.objects.filter(
             article=article,
             status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
-            assignments__production_line__factory=line.factory,
+            assignments__production_line=line,
         ).order_by("delivery_date").first()
         if order is None:
             return JsonResponse({"error": "No running order exists for this article in the factory."}, status=400)
@@ -1273,7 +1344,7 @@ def qa_mark_pass(request):
     article = Article.objects.filter(
         pk=article_id,
         orders__status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
-        orders__assignments__production_line__factory=line.factory,
+        orders__assignments__production_line=line,
     ).distinct().first() if article_id else None
     if article is None and article_id is None:
         legacy_order = ProductionOrder.objects.filter(
@@ -1298,7 +1369,7 @@ def qa_mark_pass(request):
         order = ProductionOrder.objects.filter(
             article=article,
             status__in=[ProductionOrder.Status.PENDING, ProductionOrder.Status.IN_PROGRESS],
-            assignments__production_line__factory=line.factory,
+            assignments__production_line=line,
         ).order_by("delivery_date").first()
         if order is None:
             return JsonResponse({"error": "No running order exists for this article in the factory."}, status=400)

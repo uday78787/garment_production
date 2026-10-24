@@ -1,5 +1,7 @@
 from decimal import Decimal
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
@@ -77,6 +79,17 @@ class QualityDefectMasterPageTest(TestCase):
         self.user.is_staff = True
         self.user.save()
 
+    def test_quality_dashboard_offers_manual_refresh_and_background_sync(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("quality:dashboard"))
+
+        self.assertContains(response, 'id="dashboard-refresh-button"')
+        self.assertContains(response, "Dashboard data syncs every 10 seconds")
+        self.assertContains(response, "dashboardSyncIntervalMs = 10000")
+        self.assertContains(response, 'id="dashboard-live-content"')
+        self.assertContains(response, 'id="dashboard-live-scripts"')
+        self.assertNotContains(response, "Auto-refreshing in")
+
     def test_defect_master_page_renders(self):
         self.client.force_login(self.user)
         response = self.client.get(reverse("quality:defect_master_list"))
@@ -101,6 +114,297 @@ class HourlyQualityCheckTest(TestCase):
             delivery_date="2026-10-01",
         )
         self.user = get_user_model().objects.create_user(username="checker", password="pass1234")
+
+    def _create_defect_image_detail(self):
+        check = HourlyLineCheck.objects.create(
+            factory=self.factory,
+            production_line=self.line,
+            production_order=self.order,
+            article=self.article,
+            check_date=timezone.localdate(),
+            check_hour=9,
+            shift_name="Day Shift",
+            checker=self.user,
+        )
+        defect = DefectMaster.objects.create(
+            defect_code="D-IMAGE",
+            defect_name="Image Test Defect",
+        )
+        return HourlyLineCheckDetail.objects.create(
+            hourly_check=check,
+            defect=defect,
+            defect_image="quality/defects/test.png",
+        )
+
+    def test_defect_image_requires_login_and_allows_assigned_qa(self):
+        detail = self._create_defect_image_detail()
+        url = reverse(
+            "quality_private_defect_image",
+            kwargs={"image_path": detail.defect_image.name},
+        )
+
+        anonymous_response = self.client.get(url)
+        self.assertEqual(anonymous_response.status_code, 302)
+
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.save()
+        self.user.profile.assigned_lines.add(self.line)
+        self.client.force_login(self.user)
+        with self.settings(DEBUG=False):
+            response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["X-Accel-Redirect"],
+            "/_protected_media/quality/defects/test.png",
+        )
+        self.assertEqual(response["Cache-Control"], "private, no-store")
+
+    def test_defect_image_is_served_by_django_in_debug_mode(self):
+        detail = self._create_defect_image_detail()
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.save()
+        self.user.profile.assigned_lines.add(self.line)
+        self.client.force_login(self.user)
+
+        with TemporaryDirectory() as media_root:
+            image_file = Path(media_root) / detail.defect_image.name
+            image_file.parent.mkdir(parents=True)
+            image_file.write_bytes(b"test image bytes")
+            with self.settings(DEBUG=True, MEDIA_ROOT=media_root):
+                response = self.client.get(
+                    reverse(
+                        "quality_private_defect_image",
+                        kwargs={"image_path": detail.defect_image.name},
+                    )
+                )
+                body = b"".join(response.streaming_content)
+                response.close()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body, b"test image bytes")
+        self.assertEqual(response["Cache-Control"], "private, no-store")
+
+    def test_defect_image_denies_qa_assigned_to_another_line(self):
+        detail = self._create_defect_image_detail()
+        another_line = ProductionLine.objects.create(
+            factory=self.factory,
+            line_name="Line 06",
+            capacity_manpower=30,
+            default_working_minutes=480,
+        )
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.save()
+        self.user.profile.assigned_lines.add(another_line)
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            reverse(
+                "quality_private_defect_image",
+                kwargs={"image_path": detail.defect_image.name},
+            )
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_defect_image_allows_superuser(self):
+        detail = self._create_defect_image_detail()
+        superuser = get_user_model().objects.create_superuser(
+            username="image-admin",
+            email="image-admin@example.com",
+            password="strong-test-password",
+        )
+        self.client.force_login(superuser)
+
+        with self.settings(DEBUG=False):
+            response = self.client.get(
+                reverse(
+                    "quality_private_defect_image",
+                    kwargs={"image_path": detail.defect_image.name},
+                )
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["X-Accel-Redirect"],
+            "/_protected_media/quality/defects/test.png",
+        )
+
+    def test_qa_dashboard_article_switch_filters_data_and_assigned_article_choices(self):
+        another_article = Article.objects.create(
+            article_code="A-201",
+            article_name="Another Shirt",
+            sam=Decimal("15"),
+        )
+        another_order = ProductionOrder.objects.create(
+            order_number="PO-2002",
+            article=another_article,
+            order_quantity=800,
+            customer_name="Buyer B",
+            delivery_date="2026-10-01",
+        )
+        unassigned_line = ProductionLine.objects.create(
+            factory=self.factory,
+            line_name="Line 06",
+            capacity_manpower=30,
+            default_working_minutes=480,
+        )
+        unassigned_article = Article.objects.create(
+            article_code="A-202",
+            article_name="Unassigned Line Shirt",
+            sam=Decimal("16"),
+        )
+        unassigned_order = ProductionOrder.objects.create(
+            order_number="PO-2003",
+            article=unassigned_article,
+            order_quantity=600,
+            customer_name="Buyer B",
+            delivery_date="2026-10-01",
+        )
+        for line, order in (
+            (self.line, self.order),
+            (self.line, another_order),
+            (unassigned_line, unassigned_order),
+        ):
+            LineAssignment.objects.create(
+                production_line=line,
+                production_order=order,
+                start_date="2026-09-01",
+                default_manpower=30,
+                working_minutes_per_operator=480,
+                start_efficiency="0.25",
+                daily_efficiency_growth="0.05",
+                max_efficiency="0.60",
+            )
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.save()
+        self.user.profile.assigned_lines.add(self.line)
+        defect = DefectMaster.objects.create(
+            defect_code="D-SWITCH",
+            defect_name="Article Switch Defect",
+        )
+        own_check = HourlyLineCheck.objects.create(
+            factory=self.factory,
+            production_line=self.line,
+            production_order=self.order,
+            article=self.article,
+            check_date=timezone.localdate(),
+            check_hour=9,
+            shift_name="Day Shift",
+            inspected_quantity=8,
+            passed_quantity=5,
+            defective_quantity=3,
+            checker=self.user,
+        )
+        own_check.details.create(defect=defect, defect_quantity=3)
+        another_check = HourlyLineCheck.objects.create(
+            factory=self.factory,
+            production_line=self.line,
+            production_order=another_order,
+            article=another_article,
+            check_date=timezone.localdate(),
+            check_hour=10,
+            shift_name="Day Shift",
+            inspected_quantity=12,
+            passed_quantity=10,
+            defective_quantity=2,
+            checker=self.user,
+        )
+        another_check.details.create(defect=defect, defect_quantity=2)
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            reverse("dashboard:qa_dashboard"),
+            {"article": another_article.pk},
+        )
+
+        self.assertEqual(response.context["qa_shift_inspected"], 12)
+        self.assertEqual(response.context["qa_shift_passed"], 10)
+        self.assertEqual(len(response.context["hourly_report"]), 1)
+        self.assertEqual(response.context["hourly_report"][0]["hour"], 10)
+        self.assertEqual(len(response.context["repair_queue"]), 1)
+        self.assertEqual(response.context["repair_queue"][0]["article"], another_article.article_code)
+        self.assertEqual(response.context["selected_line"], self.line)
+        self.assertContains(response, another_article.article_code)
+        self.assertNotContains(response, unassigned_article.article_code)
+
+        data_response = self.client.get(
+            reverse("dashboard:qa_dashboard_data"),
+            {"article": another_article.pk},
+        )
+        self.assertEqual(data_response.status_code, 200)
+        self.assertEqual(data_response.json()["shift_totals"]["inspected"], 12)
+        self.assertEqual(len(data_response.json()["hourly_report"]), 1)
+
+        switched_response = self.client.get(
+            reverse("dashboard:qa_dashboard"),
+            {"article": self.article.pk},
+        )
+
+        self.assertEqual(switched_response.context["qa_shift_inspected"], 8)
+        self.assertEqual(switched_response.context["qa_shift_passed"], 5)
+        self.assertEqual(len(switched_response.context["hourly_report"]), 1)
+        self.assertEqual(switched_response.context["hourly_report"][0]["hour"], 9)
+        self.assertEqual(switched_response.context["repair_queue"][0]["article"], self.article.article_code)
+
+    def test_qa_actions_reject_articles_assigned_only_to_an_unassigned_line(self):
+        unassigned_line = ProductionLine.objects.create(
+            factory=self.factory,
+            line_name="Line 07",
+            capacity_manpower=30,
+            default_working_minutes=480,
+        )
+        unassigned_article = Article.objects.create(
+            article_code="A-203",
+            article_name="Unassigned Line Article",
+            sam=Decimal("17"),
+        )
+        unassigned_order = ProductionOrder.objects.create(
+            order_number="PO-2004",
+            article=unassigned_article,
+            order_quantity=500,
+            customer_name="Buyer B",
+            delivery_date="2026-10-01",
+        )
+        LineAssignment.objects.create(
+            production_line=unassigned_line,
+            production_order=unassigned_order,
+            start_date="2026-09-01",
+            default_manpower=30,
+            working_minutes_per_operator=480,
+            start_efficiency="0.25",
+            daily_efficiency_growth="0.05",
+            max_efficiency="0.60",
+        )
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.save()
+        self.user.profile.assigned_lines.add(self.line)
+        self.client.force_login(self.user)
+        defect = DefectMaster.objects.create(defect_code="D-UNASSIGNED", defect_name="Unassigned")
+
+        pass_response = self.client.post(
+            reverse("dashboard:qa_mark_pass"),
+            {"line_id": self.line.pk, "article_id": unassigned_article.pk},
+        )
+        defect_response = self.client.post(
+            reverse("dashboard:qa_mark_defect"),
+            data=json.dumps({
+                "line_id": self.line.pk,
+                "article_id": unassigned_article.pk,
+                "defect_code": defect.defect_code,
+                "quantity": 1,
+            }),
+            content_type="application/json",
+        )
+
+        self.assertEqual(pass_response.status_code, 400)
+        self.assertEqual(defect_response.status_code, 400)
+        self.assertFalse(HourlyLineCheck.objects.filter(article=unassigned_article).exists())
 
     def test_hourly_end_of_line_check_records_defects_and_dhu(self):
         defect = DefectMaster.objects.create(
@@ -389,7 +693,7 @@ class QAPermissionTest(TestCase):
         user.profile.assigned_lines.add(line)
 
         self.client.login(username="qa_render", password="pass1234")
-        response = self.client.get(reverse("dashboard:qa_dashboard"))
+        response = self.client.get(reverse("dashboard:qa_dashboard"), {"article": "7"})
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Inspection")
@@ -400,6 +704,13 @@ class QAPermissionTest(TestCase):
         self.assertContains(response, "Total Defect pcs")
         self.assertContains(response, "Resolve Pending Defect")
         self.assertContains(response, "Repair")
+        self.assertContains(response, 'id="dashboard-refresh-button"')
+        self.assertContains(response, "Dashboard data syncs every 10 seconds")
+        self.assertContains(response, "dashboardSyncIntervalMs = 10000")
+        self.assertContains(response, 'id="dashboard-live-content"')
+        self.assertContains(response, 'id="dashboard-live-scripts"')
+        self.assertNotContains(response, "Manual refresh only")
+        self.assertNotContains(response, "Auto-refreshing in")
         self.assertContains(response, 'data-status="REJECT" disabled')
         self.assertNotContains(response, "New Check")
         self.assertNotContains(response, '<label class="form-label">Hour</label>')

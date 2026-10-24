@@ -112,8 +112,23 @@ Start Efficiency = 25%   Daily Growth = 5%   Max Efficiency = 60%
 
 ## Docker deployment
 
+The Compose stack is prepared to run behind an **external HTTPS load balancer or
+reverse proxy**. The edge proxy must overwrite (not append or pass through
+untrusted client values for) `X-Forwarded-Proto`, forward HTTPS requests to the
+Nginx container, and only allow trusted traffic to the configured
+`NGINX_BIND_ADDRESS`. The default binds Nginx to localhost on port 80; if the
+proxy is remote, set this to a private interface address and restrict access
+with the host firewall. Django trusts that forwarded protocol header to
+recognize HTTPS.
+
+Generate unique secrets before starting Compose. `POSTGRES_PASSWORD` must be
+URL-safe because Compose uses it in the database URL. Keep the completed `.env`
+file private and outside source control.
+
 ```bash
-cp .env.example .env              # set DJANGO_SECRET_KEY, DEBUG=False, ALLOWED_HOSTS, POSTGRES_* etc.
+cp .env.example .env
+# Replace all secret and domain placeholders. Generate values with:
+python -c "import secrets; print(secrets.token_urlsafe(64))"
 docker compose build
 docker compose up -d
 docker compose exec web python manage.py createsuperuser
@@ -122,9 +137,16 @@ docker compose exec web python manage.py createsuperuser
 This brings up three containers:
 - `db` — PostgreSQL 16
 - `web` — Django app served by Gunicorn (migrations, `setup_roles`, and
-  `collectstatic` run automatically on start via `docker/entrypoint.sh`)
-- `nginx` — reverse proxy on port 80, serving `/static/` and `/media/`
-  directly and proxying everything else to `web`
+  `collectstatic` run automatically on start via `docker/entrypoint.sh`); its
+  readiness check verifies database connectivity
+- `nginx` — reverse proxy on port 80, serving `/static/` directly and
+  proxying application and authenticated media requests to `web`. Defect
+  images are released by Nginx only after Django checks login and line access.
+
+Before exposing a deployment, run `python manage.py check --deploy` with the
+deployment environment variables and verify that the external proxy enforces
+HTTPS. The Compose stack is not started by these instructions or by repository
+validation.
 
 ### Database backups
 

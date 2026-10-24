@@ -5,7 +5,7 @@ Reference / setup data: production lines, articles (styles) with SAM, and
 the factory holiday calendar.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -27,7 +27,8 @@ class Factory(TimeStampedModel):
     country = models.CharField(max_length=100, default="India")
     active_status = models.BooleanField(default=True)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
+        abstract = False
         ordering = ["name"]
 
     def __str__(self):
@@ -82,14 +83,15 @@ class FactoryShift(TimeStampedModel):
         related_name="factory_shifts_assigned",
     )
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
+        abstract = False
         ordering = ["factory__name", "start_time"]
 
     def __str__(self):
         return f"{self.factory.name} - {self.shift_name} ({self.start_time} to {self.end_time})"
 
     @staticmethod
-    def _coerce_time(value):
+    def _coerce_time(value: object) -> time | None:
         if value is None:
             return None
         if isinstance(value, str):
@@ -98,8 +100,8 @@ class FactoryShift(TimeStampedModel):
                     return datetime.strptime(value, fmt).time()
                 except ValueError:
                     continue
-            return value
-        return value
+            return None
+        return value if isinstance(value, time) else None
 
     @property
     def total_shift_hours(self):
@@ -160,15 +162,20 @@ class FactoryShift(TimeStampedModel):
         start_date = now.date()
         overtime_start = self._coerce_time(self.overtime_start_time)
         start_time = self._coerce_time(self.start_time)
-        if overtime_start and overtime_start >= start_time:
+        end_time = self._coerce_time(self.end_time)
+        if end_time is None:
+            raise ValueError("Shift end time must be a valid time.")
+        if overtime_start and start_time and overtime_start >= start_time:
             return datetime.combine(start_date, overtime_start) + timedelta(hours=self.overtime_hours)
-        return datetime.combine(start_date, self._coerce_time(self.end_time))
+        return datetime.combine(start_date, end_time)
 
     def is_active_at(self, current_dt=None):
         now = timezone.localtime(current_dt) if current_dt else timezone.localtime()
         current_time = now.time()
         start_time = self._coerce_time(self.start_time)
         end_time = self._coerce_time(self.end_time)
+        if start_time is None or end_time is None:
+            raise ValueError("Shift start and end times must be valid.")
         if start_time <= end_time:
             return start_time <= current_time <= end_time
         return current_time >= start_time or current_time <= end_time
@@ -189,6 +196,8 @@ class FactoryShift(TimeStampedModel):
         start_time = self._coerce_time(self.start_time)
         end_time = self._coerce_time(self.end_time)
         overtime_start = self._coerce_time(self.overtime_start_time)
+        if start_time is None or end_time is None:
+            raise ValueError("Shift start and end times must be valid.")
 
         shift_start_dt = timezone.make_aware(datetime.combine(now.date(), start_time), timezone.get_current_timezone())
         if start_time <= end_time:
@@ -234,16 +243,28 @@ class FactoryShift(TimeStampedModel):
             if not start or not end:
                 continue
             if start <= current_time <= end:
-                on_break = bool(break_start and break_end and break_start <= current_time <= break_end)
+                on_break = bool(
+                    break_start is not None
+                    and break_end is not None
+                    and break_start <= current_time <= break_end
+                )
+                break_label = (
+                    f"Break {break_start.strftime('%H:%M')} - {break_end.strftime('%H:%M')}"
+                    if on_break and break_start is not None and break_end is not None
+                    else ""
+                )
                 return {
                     "number": hour_number,
                     "label": f"Hour {hour_number}",
                     "window": f"{start.strftime('%H:%M')} - {end.strftime('%H:%M')}",
                     "on_break": on_break,
-                    "break_label": f"Break {break_start.strftime('%H:%M')} - {break_end.strftime('%H:%M')}" if on_break else "",
+                    "break_label": break_label,
                 }
         hour_start, hour_end = self.current_hour_window(current_dt)
-        fallback_number = max(int((hour_start - timezone.make_aware(datetime.combine(hour_start.date(), self._coerce_time(self.start_time)), timezone.get_current_timezone())).total_seconds() // 3600) + 1, 1)
+        shift_start = self._coerce_time(self.start_time)
+        if shift_start is None:
+            raise ValueError("Shift start time must be a valid time.")
+        fallback_number = max(int((hour_start - timezone.make_aware(datetime.combine(hour_start.date(), shift_start), timezone.get_current_timezone())).total_seconds() // 3600) + 1, 1)
         return {
             "number": fallback_number,
             "label": f"Hour {fallback_number}",
@@ -289,7 +310,8 @@ class LineShiftManpower(TimeStampedModel):
     working_minutes = models.PositiveIntegerField(validators=[MinValueValidator(1)], editable=False)
     entered_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="manpower_entries_entered")
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
+        abstract = False
         ordering = ["-entry_date", "production_line__line_name", "shift__start_time"]
         constraints = [
             models.UniqueConstraint(
@@ -301,13 +323,16 @@ class LineShiftManpower(TimeStampedModel):
     def clean(self):
         from django.core.exceptions import ValidationError
 
-        if self.shift_id and self.production_line_id and self.shift.factory_id != self.production_line.factory_id:
+        shift = self.shift if getattr(self, "shift_id", None) else None
+        production_line = self.production_line if getattr(self, "production_line_id", None) else None
+        factory = self.factory if getattr(self, "factory_id", None) else None
+        if shift and production_line and shift.factory != production_line.factory:
             raise ValidationError("The shift and production line must belong to the same factory.")
-        if self.factory_id and self.production_line_id and self.factory_id != self.production_line.factory_id:
+        if factory and production_line and factory != production_line.factory:
             raise ValidationError("The factory must match the production line factory.")
 
     def save(self, *args, **kwargs):
-        self.factory_id = self.production_line.factory_id
+        self.factory = self.production_line.factory
         self.working_minutes = self.shift.shift_minutes
         self.full_clean()
         return super().save(*args, **kwargs)
@@ -327,7 +352,8 @@ class ProductionLineShiftAssignment(TimeStampedModel):
     )
     active = models.BooleanField(default=True)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
+        abstract = False
         ordering = ["assignment_date", "production_line__line_name"]
         constraints = [
             models.UniqueConstraint(
@@ -353,7 +379,8 @@ class ProductionLine(TimeStampedModel):
     )
     active_status = models.BooleanField(default=True)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
+        abstract = False
         ordering = ["line_name"]
 
     def __str__(self):
@@ -373,7 +400,8 @@ class Article(TimeStampedModel):
         help_text="Standard Allotted Minutes to produce one piece.",
     )
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
+        abstract = False
         ordering = ["article_code"]
 
     def __str__(self):

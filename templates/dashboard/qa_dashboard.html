@@ -5,7 +5,7 @@
   <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2 mb-4">
     <div>
       <p class="text-uppercase text-muted mb-1">Inspection</p>
-      <h2 class="mb-0">Line: {{ assigned_lines.0.line_name|default:'N/A' }}</h2>
+      <h2 class="mb-0">Line: {% if selected_line %}{{ selected_line.line_name }}{% elif primary_line %}{{ primary_line.line_name }}{% else %}N/A{% endif %}</h2>
     </div>
   </div>
 
@@ -44,7 +44,7 @@
           <select id="qa-article" name="article" class="form-select" {% if not running_articles %}disabled{% endif %}>
             <option value="">Select the running article being checked</option>
             {% for article in running_articles %}
-              <option value="{{ article.pk }}" {% if selected_article and selected_article.pk == article.pk %}selected{% endif %}>
+              <option value="{{ article.pk }}" data-line-id="{{ article.qa_line_id }}" {% if selected_article and selected_article.pk == article.pk %}selected{% endif %}>
                 {{ article.article_code }} - {{ article.article_name }}
               </option>
             {% empty %}
@@ -58,7 +58,7 @@
           </button>
         </div>
       </form>
-      <div class="form-text mt-2">Select a running factory article and press Search before recording QA data.</div>
+      <div class="form-text mt-2">Select an article running on one of your assigned production lines before recording QA data.</div>
     </div>
   </div>
 
@@ -168,6 +168,7 @@
 {% csrf_token %}
 {{ repair_queue|json_script:"repair-queue-data" }}
 <script>
+(() => {
   const passTotal = document.getElementById('pass-total');
   const inspectedTotal = document.getElementById('inspected-total');
   const rejectTotal = document.getElementById('reject-total');
@@ -183,7 +184,7 @@
     .split('; ')
     .find((cookie) => cookie.startsWith('csrftoken='))
     ?.split('=')[1] || '';
-  const qaLineId = {{ assigned_lines.0.pk|default:'null' }};
+  const qaLineId = {{ selected_line_id|default:'null' }};
   const qaArticleSelect = document.getElementById('qa-article');
   const articleSearchForm = qaArticleSelect?.form;
   let qaArticleId = qaArticleSelect?.value || articleSearchForm?.dataset.selectedArticle || null;
@@ -208,7 +209,7 @@
     row.innerHTML = `
       <td>${new Date().toISOString().slice(0, 10)}</td>
       <td>{{ current_shift|default:'Shift' }}</td>
-      <td>{{ assigned_lines.0.line_name|default:'N/A' }}</td>
+      <td>{% if selected_line %}{{ selected_line.line_name }}{% elif primary_line %}{{ primary_line.line_name }}{% else %}N/A{% endif %}</td>
       <td id="report-pass">0</td>
       <td id="report-alter">0</td>
       <td id="report-reject">0</td>
@@ -403,6 +404,6 @@
 
   refreshCounters();
   renderMarkedDefects();
-
+})();
 </script>
 {% endblock %}

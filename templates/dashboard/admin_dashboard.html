@@ -399,16 +399,55 @@
 
 {% block extra_js %}
 <script>
+(() => {
 const labels = {{ chart_labels|safe }};
 new Chart(document.getElementById('outputChart'), {
     type: 'bar',
-    data: { labels: labels, datasets: [{ label: 'Output (pcs)', data: {{ chart_output_series|safe }}, backgroundColor: '#0d6efd' }] },
-    options: { responsive: true }
+    data: { labels: labels, datasets: {{ chart_line_datasets|safe }} },
+    options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+            x: { title: { display: true, text: 'Date' } },
+            y: {
+                beginAtZero: true,
+                title: { display: true, text: 'Output (pcs)' },
+                ticks: { precision: 0 }
+            }
+        }
+    }
 });
 new Chart(document.getElementById('efficiencyChart'), {
     type: 'line',
-    data: { labels: labels, datasets: [{ label: 'Efficiency %', data: {{ chart_efficiency_series|safe }}, borderColor: '#198754', tension: 0.3 }] },
-    options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    data: { labels: labels, datasets: [{
+        label: 'Average Efficiency',
+        data: {{ chart_efficiency_series|safe }},
+        borderColor: '#198754',
+        backgroundColor: '#198754',
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        tension: 0.3
+    }] },
+    options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+            x: { title: { display: true, text: 'Date' } },
+            y: {
+                beginAtZero: true,
+                title: { display: true, text: 'Efficiency (%)' },
+                ticks: { callback: value => `${value}%` }
+            }
+        },
+        plugins: {
+            tooltip: {
+                callbacks: {
+                    label: context => `${context.dataset.label}: ${context.parsed.y}%`
+                }
+            }
+        }
+    }
 });
+})();
 </script>
 {% endblock %}
