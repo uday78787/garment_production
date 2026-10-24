@@ -46,6 +46,22 @@ python manage.py createsuperuser  # first Admin login
 python manage.py runserver
 ```
 
+To reset the development database and build a complete demo factory, run
+`python manage.py setup_demo_factory` with `DEBUG=True`. It deletes all database
+data, preserves existing Superuser accounts and their credentials, removes
+non-superuser accounts, and creates linked factory, shift, production, and
+quality sample data. It never creates demo user accounts.
+Create a Superuser before running this command; that account is used for
+required user-linked demo records.
+
+For an automatic reset on every application startup, set
+`RESET_DEMO_DATA_ON_STARTUP=True`. This is accepted only when `DEBUG=True`;
+create a Superuser first and leave it `False` outside a disposable development
+database. Every startup will erase changes made since the previous demo setup.
+For a new Docker database, start once with the setting left `False`, create the
+Superuser with `docker compose exec web python manage.py createsuperuser`, then
+enable the setting and restart the web service.
+
 ### OTP password reset API
 
 Request an OTP:
@@ -136,9 +152,11 @@ docker compose exec web python manage.py createsuperuser
 
 This brings up three containers:
 - `db` — PostgreSQL 16
-- `web` — Django app served by Gunicorn (migrations, `setup_roles`, and
+- `web` — Django app served by Gunicorn (migrations, role setup, and
   `collectstatic` run automatically on start via `docker/entrypoint.sh`); its
-  readiness check verifies database connectivity
+  readiness check verifies database connectivity. `RESET_DEMO_DATA_ON_STARTUP`
+  defaults to `False`; when explicitly enabled, each startup resets all data
+  and rebuilds the demo ecosystem, and therefore requires `DEBUG=True`.
 - `nginx` — reverse proxy on port 80, serving `/static/` directly and
   proxying application and authenticated media requests to `web`. Defect
   images are released by Nginx only after Django checks login and line access.
@@ -147,6 +165,9 @@ Before exposing a deployment, run `python manage.py check --deploy` with the
 deployment environment variables and verify that the external proxy enforces
 HTTPS. The Compose stack is not started by these instructions or by repository
 validation.
+
+Never enable `RESET_DEMO_DATA_ON_STARTUP` for a database containing real
+factory, user, production, or quality data.
 
 ### Database backups
 

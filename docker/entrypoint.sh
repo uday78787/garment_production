@@ -45,8 +45,27 @@ fi
 echo "Applying migrations..."
 python manage.py migrate --noinput
 
-echo "Setting up roles/groups..."
-python manage.py setup_roles
+case "${RESET_DEMO_DATA_ON_STARTUP:-false}" in
+    1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn])
+        case "${DEBUG:-false}" in
+            1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) ;;
+            *)
+                echo "RESET_DEMO_DATA_ON_STARTUP requires DEBUG=True; refusing to clear the database." >&2
+                exit 1
+                ;;
+        esac
+        echo "WARNING: resetting database data and rebuilding the demo factory..."
+        python manage.py setup_demo_factory
+        ;;
+    0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|"")
+        echo "Setting up roles/groups..."
+        python manage.py setup_roles
+        ;;
+    *)
+        echo "RESET_DEMO_DATA_ON_STARTUP must be a boolean value." >&2
+        exit 1
+        ;;
+esac
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput

@@ -103,9 +103,15 @@ class ReportAccessTests(TestCase):
 
     def test_factory_admin_cannot_create_or_see_other_factory_records(self):
         admin_factory = Factory.objects.create(name="Admin Factory", code="ADMIN")
-        admin_user = admin_factory.users.get(role=UserProfile.Role.FACTORY_ADMIN).user
-        admin_user.set_password("password")
-        admin_user.save()
+        admin_user = get_user_model().objects.create_user(
+            username="factory-admin",
+            password="password",
+            is_staff=True,
+        )
+        admin_profile = UserProfile.objects.get(user=admin_user)
+        admin_profile.factory = admin_factory
+        admin_profile.role = UserProfile.Role.FACTORY_ADMIN
+        admin_profile.save()
 
         admin_line = ProductionLine.objects.create(
             factory=admin_factory, line_name="Admin Line", capacity_manpower=20
