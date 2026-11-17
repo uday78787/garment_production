@@ -104,70 +104,66 @@ class FactoryShift(TimeStampedModel):
         return value if isinstance(value, time) else None
 
     @property
-    def total_shift_hours(self):
-        return int(self.standard_hours + self.overtime_hours)
+    def scheduled_working_minutes(self):
+        """Return minutes from the saved hourly schedule or shift boundaries."""
+        schedule = self.hourly_schedule or []
+        if not schedule:
+            return self.shift_minutes
 
-    def build_hourly_schedule(self, start_time=None, end_time=None, lunch_break_start=None, lunch_break_end=None):
-        """Build a clean work-hour schedule with a lunch break and optional overtime."""
-        shift_start = self._coerce_time(start_time or self.start_time)
-        shift_end = self._coerce_time(end_time or self.end_time)
-        lunch_start = self._coerce_time(lunch_break_start)
-        lunch_end = self._coerce_time(lunch_break_end)
+        total_minutes = 0
+        previous_end = None
+        for item in schedule:
+            if not isinstance(item, dict):
+                raise ValueError("Shift schedule entries must be objects.")
+            start = self._coerce_time(item.get("start"))
+            end = self._coerce_time(item.get("end"))
+            if start is None or end is None:
+                raise ValueError("Shift schedule entries must have valid start and end times.")
 
-        if shift_start is None or shift_end is None:
-            return []
+            start_minute = start.hour * 60 + start.minute
+            start_day = item.get("start_day")
+            if start_day is None:
+                start_day = (previous_end // 1440) if previous_end is not None else 0
+                while start_minute + start_day * 1440 < (previous_end or 0):
+                    start_day += 1
+            start_minute += int(start_day) * 1440
 
-        regular_hours = max(int(self.standard_hours or 0), 1)
-        hours = []
-        current = datetime.combine(datetime.today().date(), shift_start)
-        for hour_number in range(1, regular_hours + 1):
-            hour_end = current + timedelta(hours=1)
-            slot = {
-                "hour": hour_number,
-                "start": current.strftime("%H:%M"),
-                "end": hour_end.strftime("%H:%M"),
-                "break_start": "",
-                "break_end": "",
-            }
-            if lunch_start and lunch_end and current.time() < lunch_end and hour_end.time() > lunch_start:
-                break_start = max(current.time(), lunch_start)
-                break_end = min(hour_end.time(), lunch_end)
-                if break_start < break_end:
-                    slot["break_start"] = break_start.strftime("%H:%M")
-                    slot["break_end"] = break_end.strftime("%H:%M")
-            hours.append(slot)
-            current = hour_end
+            end_minute = end.hour * 60 + end.minute
+            end_day = item.get("end_day")
+            if end_day is None:
+                end_day = start_minute // 1440
+                while end_minute + end_day * 1440 <= start_minute:
+                    end_day += 1
+            end_minute += int(end_day) * 1440
+            if end_minute <= start_minute:
+                raise ValueError("Shift hour end time must be after its start time.")
 
-        overtime_start = self._coerce_time(self.overtime_start_time)
-        overtime_hours = max(int(self.overtime_hours or 0), 0)
-        if overtime_start and overtime_hours:
-            overtime_base = datetime.combine(datetime.today().date(), overtime_start)
-            for hour_number in range(regular_hours + 1, regular_hours + overtime_hours + 1):
-                slot_start = overtime_base + timedelta(hours=(hour_number - regular_hours - 1))
-                slot_end = slot_start + timedelta(hours=1)
-                hours.append({
-                    "hour": hour_number,
-                    "start": slot_start.strftime("%H:%M"),
-                    "end": slot_end.strftime("%H:%M"),
-                    "break_start": "",
-                    "break_end": "",
-                })
+            duration = end_minute - start_minute
+            break_start = self._coerce_time(item.get("break_start"))
+            break_end = self._coerce_time(item.get("break_end"))
+            if bool(break_start) != bool(break_end):
+                raise ValueError("Shift breaks must have both start and end times.")
+            if break_start and break_end:
+                break_start_minute = break_start.hour * 60 + break_start.minute
+                break_start_day = start_minute // 1440
+                while break_start_minute + break_start_day * 1440 < start_minute:
+                    break_start_day += 1
+                break_start_minute += break_start_day * 1440
 
-        if not hours:
-            return [{"hour": 1, "start": shift_start.strftime("%H:%M"), "end": shift_end.strftime("%H:%M"), "break_start": "", "break_end": ""}]
-        return hours
+                break_end_minute = break_end.hour * 60 + break_end.minute
+                break_end_day = break_start_minute // 1440
+                while break_end_minute + break_end_day * 1440 <= break_start_minute:
+                    break_end_day += 1
+                break_end_minute += break_end_day * 1440
+                if not start_minute <= break_start_minute < break_end_minute <= end_minute:
+                    raise ValueError("Shift breaks must fall within their configured hour.")
+                duration -= break_end_minute - break_start_minute
 
-    def shift_end_time(self, current_dt=None):
-        now = timezone.localtime(current_dt) if current_dt else timezone.localtime()
-        start_date = now.date()
-        overtime_start = self._coerce_time(self.overtime_start_time)
-        start_time = self._coerce_time(self.start_time)
-        end_time = self._coerce_time(self.end_time)
-        if end_time is None:
-            raise ValueError("Shift end time must be a valid time.")
-        if overtime_start and start_time and overtime_start >= start_time:
-            return datetime.combine(start_date, overtime_start) + timedelta(hours=self.overtime_hours)
-        return datetime.combine(start_date, end_time)
+            if duration < 0:
+                raise ValueError("Shift break duration cannot exceed its hour.")
+            total_minutes += duration
+            previous_end = end_minute
+        return total_minutes
 
     def is_active_at(self, current_dt=None):
         now = timezone.localtime(current_dt) if current_dt else timezone.localtime()
@@ -242,11 +238,21 @@ class FactoryShift(TimeStampedModel):
                 continue
             if not start or not end:
                 continue
-            if start <= current_time <= end:
+            in_hour = (
+                start <= current_time < end
+                if start < end
+                else current_time >= start or current_time < end
+            )
+            if in_hour:
                 on_break = bool(
                     break_start is not None
                     and break_end is not None
-                    and break_start <= current_time <= break_end
+                    and break_start != break_end
+                    and (
+                        break_start <= current_time < break_end
+                        if break_start < break_end
+                        else current_time >= break_start or current_time < break_end
+                    )
                 )
                 break_label = (
                     f"Break {break_start.strftime('%H:%M')} - {break_end.strftime('%H:%M')}"
@@ -255,7 +261,7 @@ class FactoryShift(TimeStampedModel):
                 )
                 return {
                     "number": hour_number,
-                    "label": f"Hour {hour_number}",
+                    "label": str(item.get("name") or f"Hour {hour_number}"),
                     "window": f"{start.strftime('%H:%M')} - {end.strftime('%H:%M')}",
                     "on_break": on_break,
                     "break_label": break_label,
@@ -272,34 +278,6 @@ class FactoryShift(TimeStampedModel):
             "on_break": False,
             "break_label": "",
         }
-
-    @classmethod
-    def default_factory_presets(cls, factory, assigned_by=None):
-        presets = [
-            (cls.PresetShift.DAY, "Day Shift", "08:00:00", "16:00:00"),
-            (cls.PresetShift.OVER_TIME, "OT Shift", "16:00:00", "19:00:00"),
-            (cls.PresetShift.NIGHT, "Night Shift", "20:00:00", "08:00:00"),
-        ]
-        created = []
-        for preset_code, shift_name, start_time, end_time in presets:
-            obj, made = cls.objects.get_or_create(
-                factory=factory,
-                preset_code=preset_code,
-                defaults={
-                    "shift_name": shift_name,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "shift_minutes": {cls.PresetShift.DAY: 480, cls.PresetShift.OVER_TIME: 180, cls.PresetShift.NIGHT: 480}[preset_code],
-                    "standard_hours": {cls.PresetShift.DAY: 8, cls.PresetShift.OVER_TIME: 3, cls.PresetShift.NIGHT: 8}[preset_code],
-                    "description": f"Factory preset: {shift_name}",
-                    "active": True,
-                    "assigned_by": assigned_by,
-                },
-            )
-            if made:
-                created.append(obj)
-        return created
-
 
 class LineShiftManpower(TimeStampedModel):
     factory = models.ForeignKey(Factory, on_delete=models.PROTECT, related_name="line_shift_manpower")
@@ -333,7 +311,7 @@ class LineShiftManpower(TimeStampedModel):
 
     def save(self, *args, **kwargs):
         self.factory = self.production_line.factory
-        self.working_minutes = self.shift.shift_minutes
+        self.working_minutes = self.shift.scheduled_working_minutes
         self.full_clean()
         return super().save(*args, **kwargs)
 

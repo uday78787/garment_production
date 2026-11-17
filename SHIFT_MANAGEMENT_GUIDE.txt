@@ -94,14 +94,14 @@ Important:
    Direct URL:
    http://127.0.0.1:8000/dashboard/admin/shift-management/
 2. Select the target factory.
-3. Create or confirm these three shifts:
-   - DAY SHIFT: 480 minutes (8 hours)
-   - OT SHIFT: 180 minutes (3 hours)
-   - NIGHT SHIFT: 480 minutes (8 hours)
-4. Set each shift's start time, end time, active status, and hourly schedule.
-5. Add break timings where required.
-6. Save the shift.
-7. Confirm that only the correct operational shifts are active.
+3. Create each factory's shifts by entering a name, start time, and end time.
+4. Open a shift to add, rename, or remove its scheduled hours.
+5. Set the start and end time for every hour, including next-day offsets for
+   overnight shifts, and add break timings where required.
+6. Save the schedule and confirm that only operational shifts are active.
+
+There are no required DAY, OT, or NIGHT presets. Factories can use their own
+shift names and hour-by-hour schedules.
 
 The superuser controls the factory-wide shift setup. Production users and QA
 users cannot modify the factory shift definition.
@@ -123,10 +123,8 @@ users cannot modify the factory shift definition.
 5. Enter the actual manpower for that line and shift.
 6. Click Save.
 
-The system automatically stores the shift minutes:
-- DAY SHIFT: 480
-- OT SHIFT: 180
-- NIGHT SHIFT: 480
+The system calculates shift minutes from the configured hour intervals and
+subtracts each configured break.
 
 There is one manpower record per line, shift, and date. Saving the same
 combination again updates the existing value. The value cannot exceed the
@@ -183,8 +181,9 @@ This is the daily data-entry process for the line operator or production user.
 - Production date cannot be before assignment start date.
 - Actual output cannot exceed the remaining order quantity.
 - IE manpower must be entered first when a shift is selected.
-- Shift working minutes come from the configured shift: 480, 180, or 480.
-- A production record is usually created once per assignment per date.
+- Shift working minutes come from the selected shift's configured hourly
+  schedule and breaks, not from a fixed DAY/OT/NIGHT duration.
+- A production record can be entered once per assignment, shift, and date.
 
 5.5 Production output responsibility
 The entry-level production user is responsible for entering accurate daily line
@@ -280,7 +279,7 @@ Reports and dashboards pull values from both production and quality data, such a
 Below is the complete process flow from top to bottom:
 
 1. Superuser creates the factory and master setup.
-2. Superuser creates or updates DAY, OT, and NIGHT shifts.
+2. Superuser creates or updates each factory's named shifts and hourly schedules.
 3. Superuser creates users and assigns factory/line access.
 4. IE user enters manpower for each line, shift, and date.
 5. Factory Admin and Supervisor confirm production orders and line assignments.

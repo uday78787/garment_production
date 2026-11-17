@@ -220,26 +220,21 @@ class DailyDetailExportTests(TestCase):
         self.assertTrue(context["current_hour_label"].startswith("Hour "))
         self.assertEqual(context["current_hour_label"], shift.current_schedule_status(current_dt=timezone.now())["label"]) 
 
-    def test_factory_shift_auto_schedule_supports_lunch_and_overtime(self):
+    def test_factory_shift_uses_saved_schedule_minutes_and_breaks(self):
         shift = FactoryShift(
             factory=self.factory,
             shift_name="Day Shift",
             start_time="09:00:00",
-            end_time="17:30:00",
-            standard_hours=8,
-            overtime_hours=3,
-            overtime_start_time="17:30:00",
+            end_time="12:00:00",
+            shift_minutes=180,
+            hourly_schedule=[
+                {"hour": 1, "start": "09:00", "end": "10:00", "break_start": "", "break_end": ""},
+                {"hour": 2, "start": "10:00", "end": "11:00", "break_start": "10:15", "break_end": "10:30"},
+                {"hour": 3, "start": "11:00", "end": "12:00", "break_start": "", "break_end": ""},
+            ],
         )
 
-        schedule = shift.build_hourly_schedule(lunch_break_start="12:00", lunch_break_end="12:30")
-
-        self.assertEqual(schedule[0]["hour"], 1)
-        self.assertEqual(schedule[0]["start"], "09:00")
-        self.assertEqual(schedule[0]["end"], "10:00")
-        self.assertEqual(schedule[3]["break_start"], "12:00")
-        self.assertEqual(schedule[3]["break_end"], "12:30")
-        self.assertEqual(schedule[-1]["end"], "20:30")
-        self.assertEqual(shift.total_shift_hours, 11)
+        self.assertEqual(shift.scheduled_working_minutes, 165)
 
     def test_factory_shift_rejects_malformed_time_values(self):
         self.assertIsNone(FactoryShift._coerce_time("not-a-time"))

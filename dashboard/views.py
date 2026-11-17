@@ -18,9 +18,12 @@ from datetime import datetime, time
 from pathlib import Path
 
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib import messages
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Min, Sum
 from django.http import HttpResponse, JsonResponse
+from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 from django.shortcuts import redirect
 from django.utils import timezone
@@ -1068,7 +1071,8 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
         current_shift = FactoryShift.get_active_shift_for_factory(factory) if factory else None
         context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
         schedule_status = current_shift.current_schedule_status() if current_shift else None
-        context["current_hour_label"] = schedule_status["window"] if schedule_status else "Not assigned"
+        context["current_hour_label"] = schedule_status["label"] if schedule_status else "Not assigned"
+        context["current_hour_window"] = schedule_status["window"] if schedule_status else "Not assigned"
         context["current_hour_number"] = schedule_status["label"] if schedule_status else "Not assigned"
         today_checks = HourlyLineCheck.objects.filter(
             production_line__in=profile.assigned_lines.all(),
@@ -1525,103 +1529,241 @@ class ShiftManagementView(LoginRequiredMixin, TemplateView):
             factory = factories.first()
         context["selected_factory"] = factory
         context["selected_factory_id"] = factory.pk if factory else None
-        context["factory_shifts"] = (
-            FactoryShift.objects.filter(factory=factory).order_by("start_time") if factory else FactoryShift.objects.none()
+        factory_shifts = (
+            list(FactoryShift.objects.filter(factory=factory).order_by("start_time"))
+            if factory else []
         )
+        for shift in factory_shifts:
+            shift.editor_schedule = shift.hourly_schedule or []
+            shift.editor_schedule_id = f"shift-schedule-{shift.pk}"
+            shift.editor_end_time = (
+                time.fromisoformat(shift.editor_schedule[-1]["end"])
+                if shift.editor_schedule else shift.end_time
+            )
+        context["factory_shifts"] = factory_shifts
         return context
 
     def post(self, request, *args, **kwargs):
         factory_id = request.POST.get("factory")
         factory = Factory.objects.filter(pk=factory_id, active_status=True).first()
         if factory is None:
-            from django.contrib import messages
-
             messages.error(request, "Select a valid active factory.")
             return redirect("dashboard:shift_management")
 
+        redirect_url = f"{reverse('dashboard:shift_management')}?factory={factory.pk}"
+        shift_id = request.POST.get("shift_id", "").strip()
+        simple_create = request.POST.get("simple_create") == "1" and not shift_id
+        if simple_create:
+            redirect_url += "&create=1"
+        shift = None
+        if shift_id:
+            shift = FactoryShift.objects.filter(pk=shift_id, factory=factory).first()
+            if shift is None:
+                messages.error(request, "That shift does not belong to the selected factory.")
+                return redirect(redirect_url)
+
         shift_name = (request.POST.get("shift_name") or "").strip()
         start_time = request.POST.get("start_time")
-        end_time = request.POST.get("end_time")
-        lunch_break_start = request.POST.get("lunch_break_start")
-        lunch_break_end = request.POST.get("lunch_break_end")
-        if not shift_name or not start_time or not end_time:
-            from django.contrib import messages
+        schedule_editor = request.POST.get("schedule_editor") == "1"
+        try:
+            shift_start = time.fromisoformat(start_time or "")
+        except (TypeError, ValueError):
+            messages.error(request, "Enter a valid shift start time.")
+            return redirect(redirect_url)
+        if not shift_name:
+            messages.error(request, "A shift name is required.")
+            return redirect(redirect_url)
+        if simple_create:
+            try:
+                shift_end = time.fromisoformat(request.POST.get("end_time", ""))
+            except (TypeError, ValueError):
+                messages.error(request, "Enter a valid shift end time.")
+                return redirect(redirect_url)
 
-            messages.error(request, "Shift name, start time, and end time are required.")
-            return redirect("dashboard:shift_management")
+            start_minute = shift_start.hour * 60 + shift_start.minute
+            end_minute = shift_end.hour * 60 + shift_end.minute
+            if end_minute <= start_minute:
+                end_minute += 1440
+            duration_minutes = end_minute - start_minute
+            if duration_minutes > 960:
+                messages.error(request, "A shift can be at most 16 hours long.")
+                return redirect(redirect_url)
+
+            hour_count = (duration_minutes + 59) // 60
+            standard_hours = min(hour_count, 8)
+            overtime_hours = max(hour_count - standard_hours, 0)
+            hourly_schedule = []
+            for index in range(hour_count):
+                slot_start = start_minute + index * 60
+                slot_end = min(slot_start + 60, end_minute)
+                hourly_schedule.append({
+                    "hour": index + 1,
+                    "name": f"Hour {index + 1}",
+                    "start": f"{(slot_start // 60) % 24:02d}:{slot_start % 60:02d}",
+                    "end": f"{(slot_end // 60) % 24:02d}:{slot_end % 60:02d}",
+                    "break_start": "",
+                    "break_end": "",
+                })
+
+            shift = FactoryShift(
+                factory=factory,
+                shift_name=shift_name,
+                start_time=shift_start,
+                end_time=shift_end,
+                standard_hours=standard_hours,
+                overtime_hours=overtime_hours,
+                overtime_start_time=(
+                    time((start_minute + standard_hours * 60) // 60 % 24,
+                         (start_minute + standard_hours * 60) % 60)
+                    if overtime_hours else None
+                ),
+                shift_minutes=duration_minutes,
+                description="",
+                hourly_schedule=hourly_schedule,
+                active=True,
+                assigned_by=request.user,
+            )
+            try:
+                shift.full_clean()
+                shift.save()
+            except ValidationError as exc:
+                messages.error(request, "; ".join(exc.messages))
+                return redirect(redirect_url)
+
+            request.session["selected_factory_id"] = factory.pk
+            messages.success(request, f"Shift '{shift_name}' created for {factory.name}.")
+            return redirect(f"{reverse('dashboard:shift_management')}?factory={factory.pk}")
+
+        if not schedule_editor:
+            messages.error(request, "Use the shift hour editor to update a shift schedule.")
+            return redirect(redirect_url)
 
         try:
-            standard_hours = int(request.POST.get("standard_hours") or 8)
-            overtime_hours = int(request.POST.get("overtime_hours") or 0)
+            hour_count = int(request.POST.get("hour_count"))
         except (TypeError, ValueError):
-            from django.contrib import messages
+            messages.error(request, "Enter between 1 and 16 shift hours.")
+            return redirect(redirect_url)
+        if not 1 <= hour_count <= 16:
+            messages.error(request, "A shift must contain 1-16 scheduled hours.")
+            return redirect(redirect_url)
+        standard_hours = min(hour_count, 8)
+        overtime_hours = max(hour_count - standard_hours, 0)
 
-            messages.error(request, "Shift hours must be whole numbers.")
-            return redirect("dashboard:shift_management")
-        if not 1 <= standard_hours <= 12 or not 0 <= overtime_hours <= 8:
-            from django.contrib import messages
+        schedule = []
+        previous_end = None
+        working_minutes = 0
+        try:
+            for hour_number in range(1, hour_count + 1):
+                start_value = time.fromisoformat(request.POST.get(f"hour_{hour_number}_start", ""))
+                end_value = time.fromisoformat(request.POST.get(f"hour_{hour_number}_end", ""))
+                break_start_value = request.POST.get(f"hour_{hour_number}_break_start", "").strip()
+                break_end_value = request.POST.get(f"hour_{hour_number}_break_end", "").strip()
+                start_minute = start_value.hour * 60 + start_value.minute
+                end_minute = end_value.hour * 60 + end_value.minute
+                start_day = int(request.POST.get(f"hour_{hour_number}_start_next_day") == "1")
+                end_day = int(request.POST.get(f"hour_{hour_number}_end_next_day") == "1")
+                start_minute += start_day * 1440
+                end_minute += end_day * 1440
+                if end_minute <= start_minute:
+                    raise ValueError(f"Hour {hour_number}: end time must be after its start time.")
+                if previous_end is not None and start_minute < previous_end:
+                    raise ValueError("Hours cannot overlap.")
+                if start_minute < shift_start.hour * 60 + shift_start.minute:
+                    raise ValueError(f"Hour {hour_number}: start time is before the shift starts.")
+                if start_minute - (shift_start.hour * 60 + shift_start.minute) > 1440:
+                    raise ValueError("Shift hours cannot extend beyond the next day.")
+                if end_minute - (shift_start.hour * 60 + shift_start.minute) > 960:
+                    raise ValueError("A shift can be at most 16 hours long.")
+                duration = end_minute - start_minute
+                if duration > 180:
+                    raise ValueError("Each scheduled hour must be no longer than 3 hours.")
 
-            messages.error(request, "Regular hours must be 1-12 and overtime hours must be 0-8.")
-            return redirect("dashboard:shift_management")
+                break_start = break_end = ""
+                break_minutes = 0
+                if bool(break_start_value) != bool(break_end_value):
+                    raise ValueError(f"Hour {hour_number}: enter both break times or leave both blank.")
+                if break_start_value:
+                    break_start_time = time.fromisoformat(break_start_value)
+                    break_end_time = time.fromisoformat(break_end_value)
+                    break_start_minute = break_start_time.hour * 60 + break_start_time.minute
+                    while break_start_minute < start_minute:
+                        break_start_minute += 1440
+                    break_end_minute = break_end_time.hour * 60 + break_end_time.minute
+                    while break_end_minute <= break_start_minute:
+                        break_end_minute += 1440
+                    if not start_minute <= break_start_minute < break_end_minute <= end_minute:
+                        raise ValueError(f"Hour {hour_number}: break must be inside its scheduled time.")
+                    break_minutes = break_end_minute - break_start_minute
+                    break_start = break_start_time.strftime("%H:%M")
+                    break_end = break_end_time.strftime("%H:%M")
 
-        if lunch_break_start and lunch_break_end:
-            try:
-                if time.fromisoformat(lunch_break_start) >= time.fromisoformat(lunch_break_end):
-                    raise ValueError
-            except ValueError:
-                from django.contrib import messages
+                hour_name = (
+                    request.POST.get(f"hour_{hour_number}_name", "").strip()
+                    or f"Hour {hour_number}"
+                )
+                if len(hour_name) > 60:
+                    raise ValueError(f"Hour {hour_number}: dashboard name must be 60 characters or fewer.")
+                working_minutes += duration - break_minutes
+                schedule.append({
+                    "hour": hour_number,
+                    "name": hour_name,
+                    "start": start_value.strftime("%H:%M"),
+                    "end": end_value.strftime("%H:%M"),
+                    "start_day": start_day,
+                    "end_day": end_day,
+                    "break_start": break_start,
+                    "break_end": break_end,
+                })
+                previous_end = end_minute
+        except (TypeError, ValueError) as exc:
+            messages.error(request, str(exc) or "Enter valid times for every scheduled hour.")
+            return redirect(redirect_url)
 
-                messages.error(request, "Lunch break start must be earlier than lunch break end.")
-                return redirect("dashboard:shift_management")
-
-        temp_shift = FactoryShift(
-            factory=factory,
-            shift_name=shift_name,
-            start_time=start_time,
-            end_time=end_time,
-            standard_hours=standard_hours,
-            overtime_hours=overtime_hours,
-            overtime_start_time=request.POST.get("overtime_start_time") or None,
-            active=request.POST.get("active") == "on",
-            assigned_by=request.user,
+        if not schedule or schedule[0]["start"] != shift_start.strftime("%H:%M") or schedule[0]["start_day"] != 0:
+            messages.error(request, "The first hour must start at the shift start time.")
+            return redirect(redirect_url)
+        if not 1 <= working_minutes <= 1440:
+            messages.error(request, "Scheduled working time must be between 1 minute and 24 hours.")
+            return redirect(redirect_url)
+        try:
+            shift_end = time.fromisoformat(request.POST.get("end_time", ""))
+        except (TypeError, ValueError):
+            messages.error(request, "Enter a valid shift end time.")
+            return redirect(redirect_url)
+        end_day = int(shift_end <= shift_start)
+        expected_end = shift_end.hour * 60 + shift_end.minute + end_day * 1440
+        actual_end = (
+            time.fromisoformat(schedule[-1]["end"]).hour * 60
+            + time.fromisoformat(schedule[-1]["end"]).minute
+            + schedule[-1]["end_day"] * 1440
         )
-        hourly_schedule = temp_shift.build_hourly_schedule(
-            start_time=start_time,
-            end_time=end_time,
-            lunch_break_start=lunch_break_start,
-            lunch_break_end=lunch_break_end,
+        if actual_end != expected_end:
+            messages.error(request, "The last shift hour must end at the shift end time.")
+            return redirect(redirect_url)
+
+        shift = shift or FactoryShift(factory=factory)
+        shift.shift_name = shift_name
+        shift.start_time = shift_start
+        shift.end_time = time.fromisoformat(schedule[-1]["end"])
+        shift.standard_hours = standard_hours
+        shift.overtime_hours = overtime_hours
+        shift.overtime_start_time = (
+            time.fromisoformat(schedule[standard_hours]["start"])
+            if overtime_hours else None
         )
-
-        if not hourly_schedule:
-            from django.contrib import messages
-
-            messages.error(request, "The shift schedule could not be generated. Please review the selected times.")
-            return redirect("dashboard:shift_management")
-
-        description = request.POST.get("description") or ""
-        if lunch_break_start and lunch_break_end:
-            description = json.dumps({
-                "lunch_break": {"start": lunch_break_start, "end": lunch_break_end},
-                "overtime_start": request.POST.get("overtime_start_time") or "",
-                "overtime_hours": overtime_hours,
-            }, ensure_ascii=True)
-
-        FactoryShift.objects.create(
-            factory=factory,
-            shift_name=shift_name,
-            start_time=start_time,
-            end_time=end_time,
-            standard_hours=standard_hours,
-            overtime_hours=overtime_hours,
-            overtime_start_time=request.POST.get("overtime_start_time") or None,
-            description=description,
-            hourly_schedule=hourly_schedule,
-            active=request.POST.get("active") == "on",
-            assigned_by=request.user,
-        )
+        shift.shift_minutes = working_minutes
+        shift.description = request.POST.get("description", "").strip()
+        shift.hourly_schedule = schedule
+        shift.active = request.POST.get("active") == "on"
+        shift.assigned_by = request.user
+        try:
+            shift.full_clean()
+            shift.save()
+        except ValidationError as exc:
+            messages.error(request, "; ".join(exc.messages))
+            return redirect(redirect_url)
 
         request.session["selected_factory_id"] = factory.pk
-        from django.contrib import messages
-
-        messages.success(request, f"Shift '{shift_name}' saved for {factory.name}. Break schedule updated.")
-        return redirect("dashboard:shift_management")
+        action = "updated" if shift_id else "created"
+        messages.success(request, f"Shift '{shift_name}' {action} for {factory.name}.")
+        return redirect(redirect_url)

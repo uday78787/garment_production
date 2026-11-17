@@ -91,11 +91,46 @@ class Command(BaseCommand):
             country="India",
         )
 
-        shifts = FactoryShift.default_factory_presets(factory, assigned_by=actor)
-        day_shift = next(
-            shift for shift in shifts
-            if shift.preset_code == FactoryShift.PresetShift.DAY
-        )
+        def create_shift(name, start_minute, duration_minutes):
+            hour_count = (duration_minutes + 59) // 60
+            schedule = []
+            for index in range(hour_count):
+                slot_start = start_minute + index * 60
+                slot_end = min(slot_start + 60, start_minute + duration_minutes)
+                schedule.append({
+                    "hour": index + 1,
+                    "name": f"Hour {index + 1}",
+                    "start": f"{(slot_start // 60) % 24:02d}:{slot_start % 60:02d}",
+                    "end": f"{(slot_end // 60) % 24:02d}:{slot_end % 60:02d}",
+                    "start_day": slot_start // 1440,
+                    "end_day": slot_end // 1440,
+                    "break_start": "",
+                    "break_end": "",
+                })
+            standard_hours = min(hour_count, 8)
+            overtime_hours = max(hour_count - standard_hours, 0)
+            overtime_start = start_minute + standard_hours * 60
+            return FactoryShift.objects.create(
+                factory=factory,
+                shift_name=name,
+                start_time=f"{(start_minute // 60) % 24:02d}:{start_minute % 60:02d}",
+                end_time=f"{((start_minute + duration_minutes) // 60) % 24:02d}:{(start_minute + duration_minutes) % 60:02d}",
+                standard_hours=standard_hours,
+                overtime_hours=overtime_hours,
+                overtime_start_time=(
+                    f"{(overtime_start // 60) % 24:02d}:{overtime_start % 60:02d}"
+                    if overtime_hours else None
+                ),
+                shift_minutes=duration_minutes,
+                description=f"Demo shift: {name}",
+                hourly_schedule=schedule,
+                active=True,
+                assigned_by=actor,
+            )
+
+        day_shift = create_shift("Day Shift", 8 * 60, 8 * 60)
+        create_shift("OT Shift", 16 * 60, 3 * 60)
+        create_shift("Night Shift", 20 * 60, 12 * 60)
 
         lines = [
             ProductionLine.objects.create(

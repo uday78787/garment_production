@@ -1,402 +1,389 @@
 {% extends "base.html" %}
-{% block title %}Manage Shifts{% endblock %}
+{% block title %}Factory Shift Management{% endblock %}
 {% block extra_css %}
 <style>
-  .shift-shell {
-    background: #f3f4f6;
-    border: 1px solid #dfe3e8;
-    border-radius: 12px;
-    padding: 20px 18px 8px;
+  .shift-page { max-width: 1440px; }
+  .shift-card { border: 1px solid #dce3eb; border-radius: 14px; background: #fff; }
+  .shift-card-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .shift-card-header h2 { font-size: 1.15rem; margin: 0; font-weight: 700; }
+  .shift-fields { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 1rem; }
+  .shift-fields label, .hour-table label { display: block; font-size: .82rem; font-weight: 600; color: #475569; margin-bottom: .35rem; }
+  .hour-table-wrap { overflow-x: auto; }
+  .hour-table { min-width: 1060px; }
+  .hour-table th { background: #f1f5f9; color: #334155; font-size: .85rem; white-space: nowrap; }
+  .hour-table td, .hour-table th { vertical-align: middle; padding: .65rem; }
+  .hour-table input { min-width: 115px; }
+  .hour-number { font-weight: 700; white-space: nowrap; }
+  .hour-kind { display: block; color: #64748b; font-size: .75rem; font-weight: 500; }
+  .form-control, .form-select { min-height: 42px; }
+  .empty-state { border: 1px dashed #cbd5e1; border-radius: 12px; background: #f8fafc; }
+  @media (max-width: 850px) {
+    .shift-fields { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
   }
-  .shift-topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 18px;
+  @media (max-width: 520px) {
+    .shift-fields { grid-template-columns: 1fr; }
+    .shift-card-header { align-items: flex-start; flex-direction: column; }
   }
-  .shift-title {
-    font-size: 2rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    color: #1f2937;
-  }
-  .shift-actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .shift-control {
-    min-width: 180px;
-    height: 42px;
-    border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    background: #fff;
-    padding: 0 12px;
-    color: #1f2937;
-  }
-  .btn-primary-soft {
-    background: #1f6fe5;
-    border: none;
-    color: white;
-    font-weight: 600;
-    border-radius: 8px;
-    padding: 10px 18px;
-  }
-  .btn-primary-soft:hover {
-    background: #1557b5;
-    color: white;
-  }
-  .shift-table {
-    background: #fff;
-    border: 1px solid #dfe3e8;
-    border-radius: 10px;
-    overflow: hidden;
-  }
-  .shift-table thead th {
-    background: #edf2f7;
-    color: #374151;
-    border-bottom: 1px solid #dfe3e8;
-    font-weight: 700;
-    padding: 14px 12px;
-  }
-  .shift-table tbody td {
-    padding: 14px 12px;
-    vertical-align: middle;
-    border-bottom: 1px solid #eef1f4;
-  }
-  .shift-table tbody tr:last-child td {
-    border-bottom: none;
-  }
-  .icon-btn {
-    border: none;
-    background: transparent;
-    color: #2f6fe5;
-    font-size: 1.1rem;
-    padding: 4px 6px;
-  }
-  .manage-panel {
-    background: #f8fafc;
-    border: 1px solid #dfe3e8;
-    border-radius: 14px;
-    margin-top: 28px;
-    padding: 20px 22px 10px;
-  }
-  .manage-panel h4 {
-    margin-bottom: 8px;
-    font-weight: 700;
-    color: #1f2937;
-  }
-  .info-note {
-    background: #edf7ff;
-    border: 1px solid #cfe6ff;
-    color: #334155;
-    border-radius: 8px;
-    padding: 12px 14px;
-    margin-bottom: 18px;
-    font-size: 0.95rem;
-  }
-  .form-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(200px, 1fr));
-    gap: 16px 18px;
-  }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .field label {
-    font-weight: 600;
-    color: #374151;
-  }
-  .field input,
-  .field select,
-  .field textarea {
-    border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    background: #fff;
-    padding: 9px 10px;
-    font-size: 0.95rem;
-  }
-  .field textarea {
-    min-height: 72px;
-    resize: vertical;
-  }
-  .checkbox-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 26px;
-    color: #374151;
-    font-weight: 600;
-  }
-  .hours-box {
-    margin-top: 22px;
-    border-top: 1px dashed #cbd5e1;
-    padding-top: 18px;
-  }
-  .hour-row {
-    display: grid;
-    grid-template-columns: 100px 1fr 1fr 1fr 1fr;
-    gap: 12px;
-    align-items: center;
-    padding: 12px 0;
-    border-bottom: 1px dashed #dfe3e8;
-  }
-  .hour-row:last-child {
-    border-bottom: none;
-  }
-  .hour-label {
-    font-weight: 700;
-    color: #374151;
-  }
-  .break-drop-zone {
-    min-height: 42px;
-    border: 1px dashed #cbd5e1;
-    border-radius: 8px;
-    background: #f8fafc;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #475569;
-    font-weight: 600;
-    cursor: pointer;
-    padding: 6px 8px;
-  }
-  .break-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: #e0f2fe;
-    color: #0f172a;
-    border: 1px solid #bae6fd;
-    border-radius: 999px;
-    padding: 6px 10px;
-    font-size: 0.8rem;
-    font-weight: 600;
-  }
-  .break-chip .close {
-    font-size: 1rem;
-    cursor: pointer;
-  }
-  .break-editor {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .break-editor input {
-    width: 110px;
-  }
-  .save-bar {
-    margin-top: 20px;
-    display: flex;
-    justify-content: flex-end;
-  }
-  @media (max-width: 992px) {
-    .form-grid {
-      grid-template-columns: 1fr;
-    }
-    .hour-row {
-      grid-template-columns: 1fr 1fr;
+  @media (max-width: 700px) {
+    .hour-table-wrap, .hour-table, .hour-table tbody { display: block; width: 100%; }
+    .hour-table { min-width: 0; }
+    .hour-table thead { display: none; }
+    .hour-table tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid #dce3eb; }
+    .hour-table td { min-width: 0; border: 0; padding: .6rem .4rem; }
+    .hour-table td:nth-child(1), .hour-table td:nth-child(2), .hour-table td:nth-child(4), .hour-table td:nth-child(6) { grid-column: 1 / -1; }
+    .hour-table input { min-width: 0; width: 100%; }
+    .hour-table label.visually-hidden {
+      position: static !important;
+      width: auto !important;
+      height: auto !important;
+      padding: 0 !important;
+      margin: 0 0 .3rem !important;
+      overflow: visible !important;
+      clip: auto !important;
+      white-space: normal !important;
+      color: #475569;
+      font-size: .75rem;
     }
   }
 </style>
 {% endblock %}
 {% block content %}
-<div class="container-fluid py-3 px-3">
-  <div class="shift-shell">
-    <div class="shift-topbar">
-      <div class="shift-title">Factory Shift Management</div>
-      <div class="shift-actions">
-        <select class="shift-control" id="factory-filter" name="factory" aria-label="Location">
-          {% for factory in factories %}
-            <option value="{{ factory.pk }}" {% if selected_factory_id == factory.pk %}selected{% endif %}>{{ factory.name }}</option>
-          {% endfor %}
-        </select>
-        <a href="#shift-editor" class="btn btn-primary-soft btn-sm">+ CREATE SHIFT</a>
-      </div>
+<main class="container-fluid shift-page py-4 px-3 px-lg-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+    <div>
+      <h1 class="h3 fw-bold mb-1">Factory Shift Management</h1>
+      <p class="text-muted mb-0">Create factory shifts with a name and start/end times; adjust their hourly schedule afterward.</p>
     </div>
-
-    <div class="shift-table table-responsive">
-      <table class="table mb-0 align-middle">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Code</th>
-            <th>Start Time</th>
-            <th>End Time</th>
-            <th>Lunch Break</th>
-            <th>Overtime</th>
-            <th>Shift Hours</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% if factory_shifts %}
-            {% for shift in factory_shifts %}
-            <tr>
-              <td>{{ shift.shift_name }}</td>
-              <td>{{ shift.preset_code|default:shift.shift_name|lower|cut:' ' }}</td>
-              <td>{{ shift.start_time|time:"h:i A" }}</td>
-              <td>{{ shift.end_time|time:"h:i A" }}</td>
-              <td>{% if shift.overtime_start_time %}{{ shift.start_time|time:"h:i A" }} to {{ shift.end_time|time:"h:i A" }}{% else %}-{% endif %}</td>
-              <td>{% if shift.overtime_start_time %}{{ shift.overtime_start_time|time:"h:i A" }} ({{ shift.overtime_hours }}h){% else %}-{% endif %}</td>
-              <td>{{ shift.total_shift_hours }}</td>
-            </tr>
-            {% endfor %}
-          {% else %}
-            <tr>
-              <td colspan="7" class="text-center text-muted py-4">No shifts configured for this location yet.</td>
-            </tr>
-          {% endif %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="manage-panel" id="shift-editor">
-    <h4>Shift Setup</h4>
-    <div class="info-note">
-      Use the factory standard pattern below: Day Shift 09:00 to 17:30 with a lunch break from 12:00 to 12:30, then overtime from 17:30 to 20:30 (3 hours).
-    </div>
-
-    <form method="post" id="shift-form">
-      {% csrf_token %}
-      <div class="form-grid">
-        <div class="field">
-          <label for="shift_name">Shift Name</label>
-          <input id="shift_name" type="text" name="shift_name" value="Day Shift" required>
-        </div>
-        <div class="field">
-          <label for="factory">Location</label>
-          <select id="factory" name="factory" required>
-            {% for factory in factories %}
-              <option value="{{ factory.pk }}" {% if selected_factory_id == factory.pk %}selected{% endif %}>{{ factory.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="field">
-          <label for="start_time">Start Time</label>
-          <input id="start_time" type="time" name="start_time" value="09:00" required>
-        </div>
-        <div class="field">
-          <label for="end_time">End Time</label>
-          <input id="end_time" type="time" name="end_time" value="17:30" required>
-        </div>
-        <div class="field">
-          <label for="lunch_break_start">Lunch Break Start</label>
-          <input id="lunch_break_start" type="time" name="lunch_break_start" value="12:00">
-        </div>
-        <div class="field">
-          <label for="lunch_break_end">Lunch Break End</label>
-          <input id="lunch_break_end" type="time" name="lunch_break_end" value="12:30">
-        </div>
-        <div class="field">
-          <label for="standard_hours">Working Hours</label>
-          <input id="standard_hours" type="number" name="standard_hours" min="1" max="12" value="8">
-        </div>
-        <div class="field">
-          <label for="overtime_hours">Overtime Hours</label>
-          <input id="overtime_hours" type="number" name="overtime_hours" min="0" max="8" value="3">
-        </div>
-        <div class="field">
-          <label for="overtime_start_time">Overtime Start Time</label>
-          <input id="overtime_start_time" type="time" name="overtime_start_time" value="17:30">
-        </div>
-        <div class="field">
-          <label for="description">Notes</label>
-          <input id="description" type="text" name="description" placeholder="Optional shift notes">
-        </div>
-      </div>
-
-      <div class="checkbox-row">
-        <input type="checkbox" name="active" id="active" checked>
-        <label for="active">Active Shift</label>
-      </div>
-
-      <div class="hours-box">
-        <h5 class="mb-3">Hour Schedule Preview</h5>
-        {% for hour in "12345678" %}
-        <div class="hour-row" data-hour="{{ hour }}">
-          <div class="hour-label">Hour {{ hour }}</div>
-          <div class="field">
-            <label>Start Time</label>
-            <input type="time" name="hour_{{ hour }}_start" value="{% if hour == '1' %}09:00{% elif hour == '2' %}10:00{% elif hour == '3' %}11:00{% elif hour == '4' %}12:00{% elif hour == '5' %}13:00{% elif hour == '6' %}14:00{% elif hour == '7' %}15:00{% else %}16:00{% endif %}">
-          </div>
-          <div class="field">
-            <label>End Time</label>
-            <input type="time" name="hour_{{ hour }}_end" value="{% if hour == '1' %}10:00{% elif hour == '2' %}11:00{% elif hour == '3' %}12:00{% elif hour == '4' %}13:00{% elif hour == '5' %}14:00{% elif hour == '6' %}15:00{% elif hour == '7' %}16:00{% else %}17:00{% endif %}">
-          </div>
-          <div class="field">
-            <label>Lunch Break</label>
-            <div class="break-editor">
-              <input type="time" name="hour_{{ hour }}_break_start" value="{% if hour == '4' %}12:00{% else %}''{% endif %}">
-              <span>to</span>
-              <input type="time" name="hour_{{ hour }}_break_end" value="{% if hour == '4' %}12:30{% else %}''{% endif %}">
-            </div>
-          </div>
-          <div class="break-drop-zone" data-hour="{{ hour }}" draggable="true">
-            <span>{% if hour == '4' %}Lunch Break{% else %}No Break{% endif %}</span>
-          </div>
-        </div>
+    <div class="d-flex align-items-center gap-2">
+      <label class="fw-semibold" for="factory-filter">Factory</label>
+      <select class="form-select" id="factory-filter" aria-label="Select factory">
+        {% for factory in factories %}
+          <option value="{{ factory.pk }}" {% if selected_factory_id == factory.pk %}selected{% endif %}>{{ factory.name }}</option>
         {% endfor %}
-      </div>
-
-      <input type="hidden" name="break_blocks" id="break_blocks" value="[]">
-
-      <div class="save-bar">
-        <button type="submit" class="btn btn-primary-soft">Save Shift</button>
-      </div>
-    </form>
+      </select>
+    </div>
   </div>
-</div>
 
+  {% if not selected_factory %}
+    <div class="empty-state text-center p-5 text-muted">
+      <h2 class="h5 text-dark">No active factories found</h2>
+      <p class="mb-0">Create or activate a factory before setting up shifts.</p>
+    </div>
+  {% else %}
+    <section class="mb-4" aria-labelledby="existing-shifts-heading">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h2 id="existing-shifts-heading" class="h5 fw-bold mb-0">{{ selected_factory.name }} shifts</h2>
+        <span class="badge text-bg-light">{{ factory_shifts|length }} configured</span>
+      </div>
+      {% for shift in factory_shifts %}
+        <article class="shift-card p-3 p-lg-4 mb-3">
+          <form method="post" class="shift-form" data-schedule-id="{{ shift.editor_schedule_id }}">
+            {% csrf_token %}
+            <input type="hidden" name="factory" value="{{ selected_factory.pk }}">
+            <input type="hidden" name="shift_id" value="{{ shift.pk }}">
+            <div class="shift-card-header mb-3">
+              <div>
+                <h2>{{ shift.shift_name }}</h2>
+                <span class="small text-muted">{{ shift.start_time|time:"H:i" }} – {{ shift.editor_end_time|time:"H:i" }}</span>
+              </div>
+              <div class="d-flex align-items-center gap-3">
+                <span class="badge {% if shift.active %}text-bg-success{% else %}text-bg-secondary{% endif %}">{% if shift.active %}Active{% else %}Inactive{% endif %}</span>
+                <button type="submit" class="btn btn-primary">Save changes</button>
+              </div>
+            </div>
+            {% include "dashboard/partials/shift_editor_fields.html" with form_id=shift.pk shift=shift %}
+          </form>
+          {{ shift.editor_schedule|json_script:shift.editor_schedule_id }}
+        </article>
+      {% empty %}
+        <div class="empty-state p-4 text-muted mb-3">No shifts set up for this factory yet. Create the first one below.</div>
+      {% endfor %}
+    </section>
+
+    <section class="shift-card p-3 p-lg-4" aria-labelledby="new-shift-heading">
+      <div class="shift-card-header">
+        <div>
+          <h2 id="new-shift-heading">Add a shift</h2>
+          <p class="small text-muted mb-0">Create a factory shift with its name and start/end times.</p>
+        </div>
+        <button type="button" class="btn btn-primary" id="show-create-shift" aria-expanded="{% if request.GET.create %}true{% else %}false{% endif %}" aria-controls="create-shift-form">
+          Create shift
+        </button>
+      </div>
+      <form method="post" id="create-shift-form" class="mt-4" {% if not request.GET.create %}hidden{% endif %}>
+        {% csrf_token %}
+        <input type="hidden" name="factory" value="{{ selected_factory.pk }}">
+        <input type="hidden" name="simple_create" value="1">
+        <div class="shift-fields">
+          <div>
+            <label for="new-shift-name">Name</label>
+            <input id="new-shift-name" class="form-control" type="text" name="shift_name" maxlength="60" placeholder="e.g. Day Shift" required>
+          </div>
+          <div>
+            <label for="new-shift-start">Start Time</label>
+            <input id="new-shift-start" class="form-control" type="time" name="start_time" required>
+          </div>
+          <div>
+            <label for="new-shift-end">End Time</label>
+            <input id="new-shift-end" class="form-control" type="time" name="end_time" required>
+          </div>
+        </div>
+        <div class="d-flex justify-content-end gap-2 mt-3">
+          <button type="button" class="btn btn-outline-secondary" id="cancel-create-shift">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save shift</button>
+        </div>
+      </form>
+    </section>
+  {% endif %}
+</main>
+{% endblock %}
+{% block extra_js %}
 <script>
   (function () {
     const factoryFilter = document.getElementById('factory-filter');
     if (factoryFilter) {
-      factoryFilter.addEventListener('change', () => {
-        window.location.href = `${window.location.pathname}?factory=${factoryFilter.value}`;
+      factoryFilter.addEventListener('change', function () {
+        window.location.href = `${window.location.pathname}?factory=${encodeURIComponent(factoryFilter.value)}`;
       });
     }
-    const form = document.getElementById('shift-form');
-    const hiddenBreaks = document.getElementById('break_blocks');
-    const lunchStart = document.getElementById('lunch_break_start');
-    const lunchEnd = document.getElementById('lunch_break_end');
-    const overtimeStart = document.getElementById('overtime_start_time');
+    const createShiftButton = document.getElementById('show-create-shift');
+    const createShiftForm = document.getElementById('create-shift-form');
+    const cancelCreateShiftButton = document.getElementById('cancel-create-shift');
+    function setCreateFormVisible(visible) {
+      if (!createShiftForm || !createShiftButton) return;
+      createShiftForm.hidden = !visible;
+      createShiftButton.setAttribute('aria-expanded', String(visible));
+      if (visible) createShiftForm.querySelector('[name="shift_name"]').focus();
+    }
+    if (createShiftButton) {
+      createShiftButton.addEventListener('click', function () {
+        setCreateFormVisible(createShiftForm.hidden);
+      });
+    }
+    if (cancelCreateShiftButton) {
+      cancelCreateShiftButton.addEventListener('click', function () {
+        setCreateFormVisible(false);
+      });
+    }
 
-    function syncLunchBreakPreview() {
-      const lunchStartVal = lunchStart && lunchStart.value ? lunchStart.value : '12:00';
-      const lunchEndVal = lunchEnd && lunchEnd.value ? lunchEnd.value : '12:30';
-      const startVal = overtimeStart && overtimeStart.value ? overtimeStart.value : '17:30';
-      document.querySelectorAll('.hour-row').forEach((row) => {
-        const hour = row.dataset.hour;
-        const startInput = row.querySelector('input[name="hour_' + hour + '_break_start"]');
-        const endInput = row.querySelector('input[name="hour_' + hour + '_break_end"]');
-        if (startInput && endInput) {
-          const hourStart = row.querySelector('input[name="hour_' + hour + '_start"]').value;
-          const hourEnd = row.querySelector('input[name="hour_' + hour + '_end"]').value;
-          if (hourStart <= lunchStartVal && lunchEndVal <= hourEnd) {
-            startInput.value = lunchStartVal;
-            endInput.value = lunchEndVal;
-          } else if (hourStart <= startVal && startVal < hourEnd) {
-            startInput.value = '';
-            endInput.value = '';
-          } else {
-            startInput.value = '';
-            endInput.value = '';
-          }
+    function formatTime(totalMinutes) {
+      const minutes = ((totalMinutes % 1440) + 1440) % 1440;
+      return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+    }
+
+    function minuteOfDay(value) {
+      if (!value) return 0;
+      const [hours, minutes] = value.split(':').map(Number);
+      return hours * 60 + minutes;
+    }
+
+    function makeInput(id, name, type, value, labelText, required) {
+      const wrapper = document.createElement('div');
+      const label = document.createElement('label');
+      label.className = 'visually-hidden';
+      label.htmlFor = id;
+      label.textContent = labelText;
+      const input = document.createElement('input');
+      input.id = id;
+      input.className = type === 'checkbox' ? 'form-check-input' : 'form-control';
+      input.type = type;
+      input.name = name;
+      if (type === 'checkbox') {
+        input.value = '1';
+        input.checked = Boolean(value);
+        wrapper.className = 'form-check';
+        label.className = 'form-check-label ms-1';
+      } else {
+        input.value = value || '';
+        input.required = Boolean(required);
+        if (type === 'text') input.maxLength = 60;
+      }
+      input.setAttribute('aria-label', labelText);
+      wrapper.append(label, input);
+      return { wrapper, input };
+    }
+
+    function addRow(form, row, index, startDay, endDay) {
+      const tableBody = form.querySelector('.hour-rows');
+      const number = index + 1;
+      const tr = document.createElement('tr');
+      const name = makeInput(`${form.id}-hour-${number}-name`, `hour_${number}_name`, 'text', row.name || `Hour ${number}`, `Hour ${number} name`, true);
+      const start = makeInput(`${form.id}-hour-${number}-start`, `hour_${number}_start`, 'time', row.start, `Hour ${number} start time`, true);
+      const startNextDay = makeInput(`${form.id}-hour-${number}-start-next-day`, `hour_${number}_start_next_day`, 'checkbox', startDay, `Hour ${number} start next day`, false);
+      const end = makeInput(`${form.id}-hour-${number}-end`, `hour_${number}_end`, 'time', row.end, `Hour ${number} end time`, true);
+      const endNextDay = makeInput(`${form.id}-hour-${number}-end-next-day`, `hour_${number}_end_next_day`, 'checkbox', endDay, `Hour ${number} end next day`, false);
+      const breakCell = document.createElement('div');
+      const breakToggle = makeInput(`${form.id}-hour-${number}-break-enabled`, `hour_${number}_break_enabled`, 'checkbox', Boolean(row.break_start || row.break_end), `Hour ${number} break timing`, false);
+      const breakFields = document.createElement('div');
+      breakFields.className = 'd-flex flex-wrap gap-2 mt-2';
+      const breakStart = makeInput(`${form.id}-hour-${number}-break-start`, `hour_${number}_break_start`, 'time', row.break_start, `Hour ${number} break start`, false);
+      const breakEnd = makeInput(`${form.id}-hour-${number}-break-end`, `hour_${number}_break_end`, 'time', row.break_end, `Hour ${number} break end`, false);
+      breakStart.input.disabled = !breakToggle.input.checked;
+      breakEnd.input.disabled = !breakToggle.input.checked;
+      breakFields.hidden = !breakToggle.input.checked;
+      breakFields.append(breakStart.wrapper, breakEnd.wrapper);
+      breakToggle.input.addEventListener('change', function () {
+        breakFields.hidden = !breakToggle.input.checked;
+        breakStart.input.disabled = !breakToggle.input.checked;
+        breakEnd.input.disabled = !breakToggle.input.checked;
+        if (!breakToggle.input.checked) {
+          breakStart.input.value = '';
+          breakEnd.input.value = '';
         }
       });
+      breakCell.append(breakToggle.wrapper, breakFields);
+      const removeCell = document.createElement('div');
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'btn btn-outline-danger btn-sm remove-shift-hour';
+      removeButton.textContent = 'Remove';
+      removeButton.setAttribute('aria-label', `Remove hour ${number}`);
+      removeCell.appendChild(removeButton);
+      removeButton.addEventListener('click', function () {
+        if (tableBody.children.length <= 1) return;
+        tr.remove();
+        const remainingRows = tableBody.querySelectorAll('tr');
+        const lastRow = remainingRows[remainingRows.length - 1];
+        form.querySelector('[name="end_time"]').value = lastRow.querySelector('input[name$="_end"]').value;
+        lastRow.querySelector('input[name$="_end_next_day"]').checked = Number(lastRow.dataset.endDay) > 0;
+        renumberRows(form);
+      });
+
+      [name.wrapper, start.wrapper, startNextDay.wrapper, end.wrapper, endNextDay.wrapper, breakCell, removeCell].forEach(function (content) {
+        const td = document.createElement('td');
+        td.appendChild(content);
+        tr.appendChild(td);
+      });
+      tr.dataset.startDay = String(startDay ? 1 : 0);
+      tr.dataset.endDay = String(endDay ? 1 : 0);
+      tableBody.appendChild(tr);
+      return tr;
     }
 
-    [lunchStart, lunchEnd, overtimeStart].forEach((el) => {
-      if (el) el.addEventListener('change', syncLunchBreakPreview);
-    });
-    form.addEventListener('submit', () => {
-      hiddenBreaks.value = JSON.stringify([]);
+    function renumberRows(form) {
+      const rows = Array.from(form.querySelectorAll('.hour-rows tr'));
+      rows.forEach(function (row, index) {
+        const number = index + 1;
+        row.querySelectorAll('input').forEach(function (input) {
+          const previousId = input.id;
+          const suffix = input.name.replace(/^hour_\d+_/, '');
+          input.name = `hour_${number}_${suffix}`;
+          input.id = `${form.id}-hour-${number}-${suffix.replaceAll('_', '-')}`;
+          input.setAttribute('aria-label', `Hour ${number} ${suffix.replaceAll('_', ' ')}`);
+          const label = row.querySelector(`label[for="${previousId}"]`);
+          if (label) label.htmlFor = input.id;
+        });
+        const removeButton = row.querySelector('.remove-shift-hour');
+        removeButton.setAttribute('aria-label', `Remove hour ${number}`);
+        removeButton.disabled = rows.length <= 1;
+        const nameInput = row.querySelector('input[name$="_name"]');
+        if (!nameInput.value || /^Hour \d+$/.test(nameInput.value)) nameInput.value = `Hour ${number}`;
+      });
+      const count = rows.length;
+      form.querySelector('[name="hour_count"]').value = String(count);
+      const addButton = form.querySelector('.add-shift-hour');
+      addButton.disabled = count >= 16;
+    }
+
+    function renderRows(form, schedule) {
+      const tableBody = form.querySelector('.hour-rows');
+      tableBody.replaceChildren();
+      const startMinute = minuteOfDay(form.querySelector('[name="start_time"]').value);
+      const endMinute = minuteOfDay(form.querySelector('[name="end_time"]').value);
+      let previousEnd = startMinute;
+      schedule.forEach(function (row, index) {
+        let rowStart = minuteOfDay(row.start);
+        let startDay = row.start_day === undefined ? (index ? Math.floor(previousEnd / 1440) : 0) : Number(row.start_day);
+        while (rowStart + startDay * 1440 < previousEnd) startDay += 1;
+        rowStart += startDay * 1440;
+        let rowEnd = minuteOfDay(row.end);
+        let endDay = row.end_day === undefined ? Math.floor(rowStart / 1440) : Number(row.end_day);
+        while (rowEnd + endDay * 1440 <= rowStart) endDay += 1;
+        rowEnd += endDay * 1440;
+        previousEnd = rowEnd;
+        addRow(form, row, index, startDay > 0, endDay > 0);
+      });
+      if (schedule.length && tableBody.lastElementChild) {
+        const lastRow = tableBody.lastElementChild;
+        const finalEnd = minuteOfDay(lastRow.querySelector('input[name$="_end"]').value) + Number(lastRow.dataset.endDay) * 1440;
+        const expectedEnd = endMinute <= startMinute ? endMinute + 1440 : endMinute;
+        if (finalEnd !== expectedEnd && schedule[schedule.length - 1].end_day === undefined) {
+          lastRow.querySelector('input[name$="_end"]').value = formatTime(endMinute);
+          lastRow.dataset.endDay = String(endMinute <= startMinute ? 1 : 0);
+          lastRow.querySelector('input[type="checkbox"][name$="_end_next_day"]').checked = endMinute <= startMinute;
+        }
+      }
+      renumberRows(form);
+    }
+
+    document.querySelectorAll('.shift-form').forEach(function (form, index) {
+      form.id = `shift-form-${index}`;
+      const initialSchedule = JSON.parse(document.getElementById(form.dataset.scheduleId).textContent);
+      if (!initialSchedule.length) {
+        const startMinute = minuteOfDay(form.querySelector('[name="start_time"]').value);
+        const endMinute = minuteOfDay(form.querySelector('[name="end_time"]').value);
+        const shiftEnd = endMinute <= startMinute ? endMinute + 1440 : endMinute;
+        for (let cursor = startMinute; cursor < shiftEnd; cursor += 60) {
+          initialSchedule.push({
+            name: `Hour ${initialSchedule.length + 1}`,
+            start: formatTime(cursor),
+            end: formatTime(Math.min(cursor + 60, shiftEnd)),
+            start_day: Math.floor(cursor / 1440),
+            end_day: Math.floor(Math.min(cursor + 60, shiftEnd) / 1440),
+            break_start: '',
+            break_end: ''
+          });
+        }
+      }
+      renderRows(form, initialSchedule);
+      form.querySelector('.add-shift-hour').addEventListener('click', function () {
+        const rows = Array.from(form.querySelectorAll('.hour-rows tr'));
+        if (rows.length >= 16) return;
+        const lastRow = rows[rows.length - 1];
+        const lastEnd = minuteOfDay(lastRow.querySelector('input[name$="_end"]').value) + Number(lastRow.dataset.endDay) * 1440;
+        const startValue = formatTime(lastEnd);
+        const endValue = formatTime(lastEnd + 60);
+        const newRow = addRow(form, {
+          name: `Hour ${rows.length + 1}`,
+          start: startValue,
+          end: endValue,
+          break_start: '',
+          break_end: ''
+        }, rows.length, Math.floor(lastEnd / 1440) > 0, Math.floor((lastEnd + 60) / 1440) > 0);
+        const shiftStart = minuteOfDay(form.querySelector('[name="start_time"]').value);
+        const shiftEndTime = form.querySelector('[name="end_time"]');
+        const currentEnd = minuteOfDay(shiftEndTime.value);
+        const newEndOffset = lastEnd + 60;
+        if (newEndOffset - shiftStart <= 1440) {
+          shiftEndTime.value = formatTime(newEndOffset);
+          if (newEndOffset >= 1440) newRow.dataset.endDay = '1';
+        }
+        renumberRows(form);
+      });
+      form.querySelector('[name="start_time"]').addEventListener('change', function () {
+        const firstRow = form.querySelector('.hour-rows tr');
+        if (firstRow) firstRow.querySelector('input[name$="_start"]').value = form.querySelector('[name="start_time"]').value;
+      });
+      form.querySelector('[name="end_time"]').addEventListener('change', function () {
+        const rows = form.querySelectorAll('.hour-rows tr');
+        const lastRow = rows[rows.length - 1];
+        if (!lastRow) return;
+        const startMinute = minuteOfDay(form.querySelector('[name="start_time"]').value);
+        const endMinute = minuteOfDay(form.querySelector('[name="end_time"]').value);
+        const overnight = endMinute <= startMinute;
+        lastRow.querySelector('input[name$="_end"]').value = form.querySelector('[name="end_time"]').value;
+        const dayCheckbox = lastRow.querySelector('input[name$="_end_next_day"]');
+        dayCheckbox.checked = overnight;
+        lastRow.dataset.endDay = overnight ? '1' : '0';
+      });
+      form.addEventListener('submit', function (event) {
+        renumberRows(form);
+        const rows = form.querySelectorAll('.hour-rows tr');
+        if (!rows.length || rows.length > 16) {
+          event.preventDefault();
+          window.alert('A shift needs 1–16 scheduled hours.');
+        }
+      });
     });
   })();
 </script>

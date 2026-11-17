@@ -737,23 +737,21 @@ class QAPermissionTest(TestCase):
         self.assertContains(response, "Mark defect")
         self.assertContains(response, "Broken Stitch")
 
-    def test_factory_shift_supports_custom_hours_and_overtime(self):
+    def test_factory_shift_supports_custom_hour_schedule(self):
         factory = Factory.objects.create(name="Shift Factory", code="SF1")
         shift = FactoryShift.objects.create(
             factory=factory,
             shift_name="Main Shift",
             start_time="08:00:00",
             end_time="20:00:00",
-            standard_hours=8,
-            overtime_hours=2,
-            overtime_start_time="16:00:00",
+            shift_minutes=720,
+            hourly_schedule=[
+                {"hour": 1, "start": "08:00", "end": "20:00", "break_start": "", "break_end": ""},
+            ],
             active=True,
         )
 
-        self.assertEqual(shift.standard_hours, 8)
-        self.assertEqual(shift.overtime_hours, 2)
-        self.assertEqual(shift.total_shift_hours, 10)
-        self.assertEqual(shift.shift_end_time().strftime("%H:%M"), "18:00")
+        self.assertEqual(shift.scheduled_working_minutes, 720)
 
     def test_superuser_can_manage_factory_shift_schedule_from_dashboard(self):
         factory = Factory.objects.create(name="Factory Admin UI", code="FAUI")
@@ -769,14 +767,10 @@ class QAPermissionTest(TestCase):
             reverse("dashboard:shift_management"),
             {
                 "factory": str(factory.pk),
+                "simple_create": "1",
                 "shift_name": "Day Shift",
                 "start_time": "08:00",
                 "end_time": "16:00",
-                "standard_hours": "8",
-                "overtime_hours": "0",
-                "overtime_start_time": "",
-                "description": "Factory day schedule",
-                "active": "on",
             },
         )
 

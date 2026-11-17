@@ -73,7 +73,14 @@ class DailyProductionEntry(TimeStampedModel):
         ordering = ["-production_date"]
         constraints = [
             models.UniqueConstraint(
-                fields=["assignment", "production_date"], name="unique_assignment_per_day"
+                fields=["assignment", "production_date", "shift"],
+                condition=models.Q(shift__isnull=False),
+                name="unique_assignment_date_shift",
+            ),
+            models.UniqueConstraint(
+                fields=["assignment", "production_date"],
+                condition=models.Q(shift__isnull=True),
+                name="unique_assignment_date_no_shift",
             )
         ]
         indexes = [models.Index(fields=["production_date"])]
@@ -140,6 +147,11 @@ class DailyProductionEntry(TimeStampedModel):
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     def save(self, *args, **kwargs):
+        if self.shift_id:
+            try:
+                self.working_minutes = self.shift.scheduled_working_minutes
+            except (TypeError, ValueError) as exc:
+                raise ValidationError({"shift": f"The selected shift schedule is invalid: {exc}"}) from exc
         # Recompute before validation so stale legacy derived values are normalized
         # before Django checks model field precision and the order limit.
         self.recompute_derived_fields()
@@ -156,6 +168,10 @@ class DailyProductionEntry(TimeStampedModel):
         # Basic sanity: assignment should be present
         if not self.assignment_id or self.actual_output is None:
             return
+        if self.shift_id and self.shift.factory_id != self.assignment.production_line.factory_id:
+            raise ValidationError({
+                "shift": "The selected shift must belong to the production line's factory."
+            })
 
         production_date = self.production_date
         start_date = self.assignment.start_date
@@ -184,14 +200,16 @@ class DailyProductionEntry(TimeStampedModel):
                     "assignment": "The assignment cannot be changed after a production entry is saved."
                 })
 
-        if (
-            self.working_minutes is not None
-            and self.working_minutes > self.assignment.working_minutes_per_operator
-        ):
+        max_working_minutes = (
+            self.shift.scheduled_working_minutes
+            if self.shift_id else self.assignment.working_minutes_per_operator
+        )
+        if self.working_minutes is not None and self.working_minutes > max_working_minutes:
             raise ValidationError({
                 "working_minutes": (
-                    "Working minutes cannot exceed the assignment's configured "
-                    f"daily minutes ({self.assignment.working_minutes_per_operator})."
+                    "Working minutes cannot exceed the "
+                    f"{'shift schedule' if self.shift_id else 'assignment'} limit "
+                    f"({max_working_minutes} minutes)."
                 )
             })
 

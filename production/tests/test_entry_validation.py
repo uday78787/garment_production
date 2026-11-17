@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from master_data.models import Article, Factory, ProductionLine
+from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLine
 from planning.models import LineAssignment, ProductionOrder
 from production.forms import DailyProductionEntryForm
 from production.models import DailyProductionEntry
@@ -79,6 +79,118 @@ class ProductionEntryValidationTests(TestCase):
         self.assertEqual(entry.available_minutes, Decimal("1200.00"))
         self.assertEqual(entry.target_output, Decimal("29.27"))
         self.assertEqual(entry.actual_efficiency, Decimal("0.3417"))
+
+    def test_selected_shift_schedule_drives_production_calculations(self):
+        user = get_user_model().objects.create_user(
+            username="shift-minutes-user",
+            password="test-pass-123",
+        )
+        factory = self.assignment.production_line.factory
+        shift = FactoryShift.objects.create(
+            factory=factory,
+            shift_name="Configured Shift",
+            start_time="09:00",
+            end_time="11:00",
+            standard_hours=2,
+            shift_minutes=480,
+            hourly_schedule=[
+                {"hour": 1, "start": "09:00", "end": "10:00", "break_start": "", "break_end": ""},
+                {
+                    "hour": 2,
+                    "start": "10:00",
+                    "end": "11:00",
+                    "break_start": "10:15",
+                    "break_end": "10:30",
+                },
+            ],
+        )
+        manpower_entry = LineShiftManpower.objects.create(
+            factory=factory,
+            production_line=self.assignment.production_line,
+            shift=shift,
+            entry_date="2026-08-02",
+            manpower=10,
+            entered_by=user,
+        )
+        form = DailyProductionEntryForm(
+            data={
+                "assignment": self.assignment.pk,
+                "shift": shift.pk,
+                "production_date": "2026-08-02",
+                "actual_manpower": 30,
+                "working_minutes": 480,
+                "actual_output": 20,
+                "planned_efficiency": 50,
+                "remarks": "",
+            },
+            selected_factory_id=factory.pk,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+        self.assertEqual(manpower_entry.working_minutes, 105)
+        self.assertEqual(form.cleaned_data["working_minutes"], 105)
+        entry = form.save(commit=False)
+        entry.created_by = user
+        entry.updated_by = user
+        entry.save()
+
+        self.assertEqual(entry.working_minutes, 105)
+        self.assertEqual(entry.available_minutes, Decimal("1050.00"))
+        self.assertEqual(entry.target_output, Decimal("25.61"))
+
+    def test_shift_entries_are_unique_per_shift_and_date(self):
+        user = get_user_model().objects.create_user(
+            username="shift-unique-user",
+            password="test-pass-123",
+        )
+        factory = self.assignment.production_line.factory
+        first_shift = FactoryShift.objects.create(
+            factory=factory,
+            shift_name="Morning",
+            start_time="08:00",
+            end_time="09:00",
+            shift_minutes=60,
+            hourly_schedule=[{
+                "hour": 1,
+                "start": "08:00",
+                "end": "09:00",
+                "break_start": "",
+                "break_end": "",
+            }],
+        )
+        second_shift = FactoryShift.objects.create(
+            factory=factory,
+            shift_name="Evening",
+            start_time="09:00",
+            end_time="10:00",
+            shift_minutes=60,
+            hourly_schedule=[{
+                "hour": 1,
+                "start": "09:00",
+                "end": "10:00",
+                "break_start": "",
+                "break_end": "",
+            }],
+        )
+        entry_data = {
+            "assignment": self.assignment,
+            "production_date": "2026-08-02",
+            "actual_manpower": 10,
+            "actual_output": 20,
+            "planned_efficiency": Decimal("0.50"),
+            "created_by": user,
+            "updated_by": user,
+        }
+        DailyProductionEntry.objects.create(**entry_data, shift=first_shift)
+        DailyProductionEntry.objects.create(**entry_data, shift=second_shift)
+
+        with self.assertRaises(ValidationError):
+            DailyProductionEntry.objects.create(**entry_data, shift=first_shift)
+
+        legacy_entry = DailyProductionEntry.objects.create(**entry_data)
+        self.assertIsNone(legacy_entry.shift)
+        with self.assertRaises(ValidationError):
+            DailyProductionEntry.objects.create(**entry_data)
 
     def test_form_reports_missing_production_date_without_crashing(self):
         form = DailyProductionEntryForm(

@@ -1,0 +1,48 @@
+<div class="shift-fields">
+  <div>
+    <label for="shift-{{ form_id }}-name">Shift name</label>
+    <input id="shift-{{ form_id }}-name" class="form-control" type="text" name="shift_name" value="{{ shift.shift_name|default:'Day Shift' }}" maxlength="60" required>
+  </div>
+  <div>
+    <label for="shift-{{ form_id }}-start">Start Time</label>
+    <input id="shift-{{ form_id }}-start" class="form-control" type="time" name="start_time" value="{{ shift.start_time|time:'H:i' }}" required>
+  </div>
+  <div>
+    <label for="shift-{{ form_id }}-end">End Time</label>
+    <input id="shift-{{ form_id }}-end" class="form-control" type="time" name="end_time" value="{{ shift.editor_end_time|time:'H:i' }}" required>
+  </div>
+  <div>
+    <label for="shift-{{ form_id }}-notes">Notes (optional)</label>
+    <input id="shift-{{ form_id }}-notes" class="form-control" type="text" name="description" value="{{ shift.description|default:'' }}" maxlength="500">
+  </div>
+  <div class="d-flex align-items-end pb-2">
+    <div class="form-check">
+      <input id="shift-{{ form_id }}-active" class="form-check-input" type="checkbox" name="active" {% if not shift or shift.active %}checked{% endif %}>
+      <label class="form-check-label fw-semibold" for="shift-{{ form_id }}-active">Active shift</label>
+    </div>
+  </div>
+</div>
+<input type="hidden" name="schedule_editor" value="1">
+<input type="hidden" name="hour_count" value="">
+<div class="mt-4">
+  <h3 class="h6 fw-bold mb-3">Shift Hours</h3>
+  <div class="hour-table-wrap">
+    <table class="table table-bordered hour-table mb-0">
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Start Time</th>
+          <th scope="col">+1 day</th>
+          <th scope="col">End Time</th>
+          <th scope="col">+1 day</th>
+          <th scope="col">Break Timing</th>
+          <th scope="col"><span class="visually-hidden">Remove</span></th>
+        </tr>
+      </thead>
+      <tbody class="hour-rows"></tbody>
+    </table>
+  </div>
+  <button type="button" class="btn btn-outline-primary btn-sm mt-3 add-shift-hour">
+    <i class="fa-solid fa-plus"></i> ADD SHIFT HOUR
+  </button>
+</div>

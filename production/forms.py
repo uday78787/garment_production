@@ -26,9 +26,9 @@ class DailyProductionEntryForm(forms.ModelForm):
     shift = forms.ModelChoiceField(
         queryset=FactoryShift.objects.none(),
         required=False,
-        label="Shift (IE manpower)",
+        label="Shift",
         widget=forms.Select(attrs={"class": "form-select"}),
-        help_text="Select the shift whose IE manpower entry should drive calculations.",
+        help_text="Production minutes are calculated from the selected shift's hourly schedule.",
     )
 
     planned_efficiency = forms.DecimalField(
@@ -44,7 +44,7 @@ class DailyProductionEntryForm(forms.ModelForm):
         label="Working minutes per operator",
         min_value=0,
         required=False,
-        help_text="Use the actual minutes spent on this article (for example, 60 or 420).",
+        help_text="Automatically calculated from the selected shift's scheduled hours and breaks.",
     )
 
     defect_pieces = forms.IntegerField(
@@ -178,7 +178,10 @@ class DailyProductionEntryForm(forms.ModelForm):
             ).first()
             if ie_entry is None:
                 raise forms.ValidationError("IE must enter manpower for this line, shift, and date first.")
-            return ie_entry.working_minutes
+            try:
+                return shift.scheduled_working_minutes
+            except (TypeError, ValueError) as exc:
+                raise forms.ValidationError(f"The selected shift schedule is invalid: {exc}") from exc
         if value is None:
             return assignment.working_minutes_per_operator if assignment else 480
         if assignment and value > assignment.working_minutes_per_operator:

@@ -28,34 +28,22 @@ class FactoryShiftAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
     list_display = (
         "factory",
         "shift_name",
-        "preset_code",
         "start_time",
         "end_time",
         "shift_minutes",
-        "standard_hours",
-        "overtime_hours",
-        "overtime_start_time",
         "active",
         "assigned_by",
     )
-    list_filter = ("factory", "active", "preset_code")
-    search_fields = ("shift_name", "factory__name", "preset_code")
-    actions = ["create_default_factory_shifts"]
+    list_filter = ("factory", "active")
+    search_fields = ("shift_name", "factory__name")
+    readonly_fields = ("shift_minutes",)
     fieldsets = (
         ("Basic Shift", {
-            "fields": ("factory", "shift_name", "preset_code", "start_time", "end_time", "active")
+            "fields": ("factory", "shift_name", "start_time", "end_time", "active")
         }),
-        ("Shift Duration", {
-            "fields": ("standard_hours", "overtime_hours", "shift_minutes", "overtime_start_time"),
-            "description": "Set the normal shift length from 1 to 8 hours, and optional overtime beyond the main shift.",
-        }),
+        ("Hourly Schedule", {"fields": ("hourly_schedule", "shift_minutes")}),
         ("Details", {"fields": ("description", "assigned_by")}),
     )
-
-    @admin.action(description="Create Day / Over Time / Night presets for selected factories")
-    def create_default_factory_shifts(self, request, queryset):
-        for factory in queryset:
-            FactoryShift.default_factory_presets(factory, assigned_by=request.user)
 
 
 @admin.register(ProductionLineShiftAssignment)
@@ -84,5 +72,4 @@ class ProductionLineAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
 class ArticleAdmin(admin.ModelAdmin):
     list_display = ("article_code", "article_name", "sam")
     search_fields = ("article_code", "article_name")
-
 
