@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -10,7 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import UserProfile
-from master_data.models import Article, Factory, FactoryShift, ProductionLine
+from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLine
 from planning.models import LineAssignment, ProductionOrder
 from quality.calculations import calculate_defect_rate, calculate_dhu, calculate_fpy
 from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail, InspectionDefect, QualityInspection
@@ -114,6 +115,35 @@ class HourlyQualityCheckTest(TestCase):
             delivery_date="2026-10-01",
         )
         self.user = get_user_model().objects.create_user(username="checker", password="pass1234")
+
+        now = timezone.localtime()
+        start_dt = now - timedelta(minutes=30)
+        end_dt = now + timedelta(minutes=30)
+        shift = FactoryShift.objects.create(
+            factory=self.factory,
+            shift_name="Current Shift",
+            start_time=start_dt.strftime("%H:%M"),
+            end_time=end_dt.strftime("%H:%M"),
+            shift_minutes=60,
+            hourly_schedule=[{
+                "hour": 1,
+                "name": "Current Hour",
+                "start": start_dt.strftime("%H:%M"),
+                "end": end_dt.strftime("%H:%M"),
+                "start_day": 0,
+                "end_day": int(end_dt.date() > start_dt.date()),
+                "break_start": "",
+                "break_end": "",
+            }],
+        )
+        LineShiftManpower.objects.create(
+            factory=self.factory,
+            production_line=self.line,
+            shift=shift,
+            entry_date=timezone.localdate(),
+            manpower=20,
+            entered_by=self.user,
+        )
 
     def _create_defect_image_detail(self):
         check = HourlyLineCheck.objects.create(

@@ -5,7 +5,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from master_data.models import Factory, FactoryShift
+from master_data.models import Factory, FactoryShift, LineShiftManpower, ProductionLine
 
 
 class ShiftManagementTests(TestCase):
@@ -121,6 +121,29 @@ class ShiftManagementTests(TestCase):
         current_time = timezone.make_aware(datetime(2026, 11, 16, 1, 30))
         self.assertEqual(shift.current_schedule_status(current_dt=current_time)["label"], "Hour 4")
 
+    def test_shift_has_no_current_hour_outside_its_saved_schedule(self):
+        shift = FactoryShift.objects.create(
+            factory=self.factory,
+            shift_name="Morning Shift",
+            start_time="08:00",
+            end_time="10:00",
+            hourly_schedule=[{
+                "hour": 1,
+                "name": "First Hour",
+                "start": "08:00",
+                "end": "09:00",
+                "break_start": "",
+                "break_end": "",
+            }],
+        )
+        outside_schedule = timezone.make_aware(datetime(2026, 11, 16, 11, 0))
+
+        self.assertIsNone(shift.current_schedule_status(current_dt=outside_schedule))
+        self.assertIsNone(FactoryShift.get_active_shift_for_factory(
+            self.factory,
+            current_dt=outside_schedule,
+        ))
+
     def test_create_saves_hourly_breaks_and_total_working_minutes(self):
         response = self.client.post(self.url, self.shift_payload(self.factory))
 
@@ -159,6 +182,19 @@ class ShiftManagementTests(TestCase):
             "break_end": "",
         }]
         shift.save()
+        line = ProductionLine.objects.create(
+            factory=self.factory,
+            line_name="Dashboard Line",
+            capacity_manpower=30,
+        )
+        LineShiftManpower.objects.create(
+            factory=self.factory,
+            production_line=line,
+            shift=shift,
+            entry_date=timezone.localdate(),
+            manpower=10,
+            entered_by=self.user,
+        )
         session = self.client.session
         session["selected_factory_id"] = self.factory.pk
         session.save()

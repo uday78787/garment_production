@@ -1,0 +1,8 @@
+cd C:\Users\bajpa\garment_production
+.\.venv\Scripts\python.exe manage.py runserver
+
+or 
+
+cd C:\Users\bajpa\garment_production
+.\.venv\Scripts\Activate.ps1
+python manage.py runserver

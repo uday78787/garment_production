@@ -238,8 +238,6 @@ def hourly_check_create(request):
     profile = getattr(request.user, "profile", None)
     assigned_lines = production_lines.filter(pk__in=profile.assigned_lines.values("pk")) if profile else production_lines.none()
     selected_line = assigned_lines.first() if assigned_lines.count() == 1 else None
-    current_shift = FactoryShift.get_active_shift_for_factory(profile.factory) if profile and profile.factory else None
-    schedule_status = current_shift.current_schedule_status() if current_shift else None
     if request.method == "POST":
         factory_id = profile.factory_id if profile else None
         line_id = selected_line.pk if selected_line else request.POST.get("production_line")
@@ -254,6 +252,19 @@ def hourly_check_create(request):
         order = running_orders.filter(article=article).order_by("delivery_date").first() if article else None
         if not line or not order or not article:
             messages.error(request, "Select an assigned line and a running factory article.")
+            return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
+
+        current_shift = FactoryShift.get_active_shift_for_factory(line.factory)
+        schedule_status = current_shift.current_schedule_status() if current_shift else None
+        if (
+            current_shift is None
+            or schedule_status is None
+            or not current_shift.has_current_manpower([line])
+        ):
+            messages.error(
+                request,
+                "A scheduled current hour and updated IE manpower are required before recording a check.",
+            )
             return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
 
         try:
@@ -292,8 +303,8 @@ def hourly_check_create(request):
             production_order=order,
             article=article,
             check_date=timezone.localdate(),
-            check_hour=schedule_status["number"] if schedule_status else timezone.localtime().hour,
-            shift_name=current_shift.shift_name if current_shift else "",
+            check_hour=schedule_status["number"],
+            shift_name=current_shift.shift_name,
             inspected_quantity=inspected_quantity,
             passed_quantity=passed_quantity + total_repaired,
             defective_quantity=max(total_defective - total_repaired, 0),

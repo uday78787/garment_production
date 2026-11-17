@@ -194,20 +194,39 @@ class DailyDetailExportTests(TestCase):
         self.assertContains(response, "Efficiency (%)")
         self.assertContains(response, "context.parsed.y}%")
 
-    def test_admin_dashboard_current_hour_uses_hour_number_label(self):
+    def test_admin_dashboard_current_hour_uses_configured_hour_label(self):
         factory = Factory.objects.create(name="Factory 2", code="FAC2")
-        ProductionLine.objects.create(factory=factory, line_name="Line 2", capacity_manpower=30)
+        line = ProductionLine.objects.create(factory=factory, line_name="Line 2", capacity_manpower=30)
+        now = timezone.localtime()
+        start_dt = now - timedelta(minutes=30)
+        end_dt = now + timedelta(minutes=30)
         shift = FactoryShift.objects.create(
             factory=factory,
             shift_name="Day Shift",
-            start_time="08:00:00",
-            end_time="16:00:00",
-            standard_hours=8,
+            start_time=start_dt.strftime("%H:%M"),
+            end_time=end_dt.strftime("%H:%M"),
+            standard_hours=1,
             active=True,
             hourly_schedule=[
-                {"hour": 1, "start": "08:00", "end": "09:00", "break_start": "", "break_end": ""},
-                {"hour": 2, "start": "09:00", "end": "10:00", "break_start": "", "break_end": ""},
+                {
+                    "hour": 1,
+                    "name": "Current Hour",
+                    "start": start_dt.strftime("%H:%M"),
+                    "end": end_dt.strftime("%H:%M"),
+                    "start_day": 0,
+                    "end_day": int(end_dt.date() > start_dt.date()),
+                    "break_start": "",
+                    "break_end": "",
+                },
             ],
+        )
+        LineShiftManpower.objects.create(
+            factory=factory,
+            production_line=line,
+            shift=shift,
+            entry_date=timezone.localdate(),
+            manpower=10,
+            entered_by=self.user,
         )
         self.user = get_user_model().objects.create_superuser(username="admin2", password="password123")
         self.client.force_login(self.user)
@@ -217,8 +236,41 @@ class DailyDetailExportTests(TestCase):
         view.request = request
         context = view.get_context_data()
 
-        self.assertTrue(context["current_hour_label"].startswith("Hour "))
+        self.assertEqual(context["current_hour_label"], "Current Hour")
         self.assertEqual(context["current_hour_label"], shift.current_schedule_status(current_dt=timezone.now())["label"]) 
+
+    def test_admin_dashboard_hides_current_hour_until_manpower_is_updated(self):
+        factory = Factory.objects.create(name="Factory 3", code="FAC3")
+        line = ProductionLine.objects.create(factory=factory, line_name="Line 3", capacity_manpower=30)
+        now = timezone.localtime()
+        start_dt = now - timedelta(minutes=30)
+        end_dt = now + timedelta(minutes=30)
+        FactoryShift.objects.create(
+            factory=factory,
+            shift_name="Running Shift",
+            start_time=start_dt.strftime("%H:%M"),
+            end_time=end_dt.strftime("%H:%M"),
+            standard_hours=1,
+            hourly_schedule=[{
+                "hour": 1,
+                "start": start_dt.strftime("%H:%M"),
+                "end": end_dt.strftime("%H:%M"),
+                "start_day": 0,
+                "end_day": int(end_dt.date() > start_dt.date()),
+                "break_start": "",
+                "break_end": "",
+            }],
+        )
+        request = self.client.get(reverse("dashboard:admin_dashboard")).wsgi_request
+        request.session["selected_factory_id"] = factory.pk
+        view = AdminDashboardView()
+        view.request = request
+
+        context = view.get_context_data()
+
+        self.assertEqual(context["current_shift"], "Running Shift")
+        self.assertEqual(context["current_hour_label"], "Manpower not updated")
+        self.assertEqual(context["current_hour_window"], "--")
 
     def test_factory_shift_uses_saved_schedule_minutes_and_breaks(self):
         shift = FactoryShift(

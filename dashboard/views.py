@@ -505,10 +505,26 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
         current_factory = Factory.objects.filter(pk=selected_factory_id).first() if selected_factory_id else None
         current_shift = FactoryShift.get_active_shift_for_factory(current_factory) if current_factory else None
         schedule_status = current_shift.current_schedule_status() if current_shift else None
+        profile = getattr(self.request.user, "profile", None)
+        if (
+            current_shift
+            and schedule_status
+            and profile
+            and not self.request.user.is_superuser
+            and not profile.is_admin
+        ):
+            visible_lines = profile.assigned_lines.filter(factory=current_factory)
+            if not current_shift.has_current_manpower(visible_lines):
+                schedule_status = None
+        elif current_shift and schedule_status and not current_shift.has_current_manpower():
+            schedule_status = None
         context["current_factory_name"] = current_factory.name if current_factory else "No factory selected"
         context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
-        context["current_hour_label"] = schedule_status["label"] if schedule_status else "Not assigned"
-        context["current_hour_window"] = schedule_status["window"] if schedule_status else "Not assigned"
+        context["current_hour_label"] = (
+            schedule_status["label"]
+            if schedule_status else "Manpower not updated" if current_shift else "Not assigned"
+        )
+        context["current_hour_window"] = schedule_status["window"] if schedule_status else "--"
         selected_style_id = self.request.GET.get("style")
         if selected_style_id and selected_style_id.isdigit():
             entries = entries.filter(assignment__production_order__article_id=selected_style_id)
@@ -1069,11 +1085,18 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
         context["selected_article"] = selected_article
         factory = selected_line.factory if selected_line else (profile.factory if profile else None)
         current_shift = FactoryShift.get_active_shift_for_factory(factory) if factory else None
-        context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
         schedule_status = current_shift.current_schedule_status() if current_shift else None
-        context["current_hour_label"] = schedule_status["label"] if schedule_status else "Not assigned"
-        context["current_hour_window"] = schedule_status["window"] if schedule_status else "Not assigned"
-        context["current_hour_number"] = schedule_status["label"] if schedule_status else "Not assigned"
+        if current_shift and schedule_status and not current_shift.has_current_manpower(
+            profile.assigned_lines.all() if profile else None
+        ):
+            schedule_status = None
+        context["current_shift"] = current_shift.shift_name if current_shift else "Not assigned"
+        context["current_hour_label"] = (
+            schedule_status["label"]
+            if schedule_status else "Manpower not updated" if current_shift else "Not assigned"
+        )
+        context["current_hour_window"] = schedule_status["window"] if schedule_status else "--"
+        context["current_hour_number"] = schedule_status["number"] if schedule_status else None
         today_checks = HourlyLineCheck.objects.filter(
             production_line__in=profile.assigned_lines.all(),
             check_date=timezone.localdate(),
@@ -1083,10 +1106,14 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
             if selected_article
             else today_checks
         )
-        current_hour_number = schedule_status["number"] if schedule_status else timezone.localtime().hour
-        current_hour_checks = dashboard_checks.filter(
-            check_hour=current_hour_number,
-            shift_name=current_shift.shift_name if current_shift else "",
+        current_hour_number = schedule_status["number"] if schedule_status else None
+        current_hour_checks = (
+            dashboard_checks.filter(
+                check_hour=current_hour_number,
+                shift_name=current_shift.shift_name,
+            )
+            if current_shift and current_hour_number is not None
+            else dashboard_checks.none()
         )
         current_inspected, current_passed, _ = _effective_qa_totals(current_hour_checks)
         shift_inspected, shift_passed, _ = _effective_qa_totals(dashboard_checks)
@@ -1118,7 +1145,12 @@ class QADashboardView(LoginRequiredMixin, TemplateView):
                 "alter": summary_defects,
                 "reject": 0,
                 "inspected": summary_inspected,
-                "current": check_date == timezone.localdate() and shift_name == (current_shift.shift_name if current_shift else "") and check_hour == current_hour_number,
+                "current": (
+                    current_hour_number is not None
+                    and check_date == timezone.localdate()
+                    and shift_name == current_shift.shift_name
+                    and check_hour == current_hour_number
+                ),
             })
         context["hourly_report"] = hourly_report
         repair_details = (
@@ -1273,7 +1305,16 @@ def qa_mark_defect(request):
     today = timezone.localdate()
     shift = FactoryShift.get_active_shift_for_factory(line.factory)
     schedule_status = shift.current_schedule_status() if shift else None
-    check_hour = schedule_status["number"] if schedule_status else timezone.localtime().hour
+    if (
+        shift is None
+        or schedule_status is None
+        or not shift.has_current_manpower([line], today)
+    ):
+        return JsonResponse(
+            {"error": "A scheduled current hour and updated IE manpower are required."},
+            status=400,
+        )
+    check_hour = schedule_status["number"]
     check = HourlyLineCheck.objects.filter(
         production_line=line,
         article=article,
@@ -1362,7 +1403,16 @@ def qa_mark_pass(request):
     today = timezone.localdate()
     shift = FactoryShift.get_active_shift_for_factory(line.factory)
     schedule_status = shift.current_schedule_status() if shift else None
-    check_hour = schedule_status["number"] if schedule_status else timezone.localtime().hour
+    if (
+        shift is None
+        or schedule_status is None
+        or not shift.has_current_manpower([line], today)
+    ):
+        return JsonResponse(
+            {"error": "A scheduled current hour and updated IE manpower are required."},
+            status=400,
+        )
+    check_hour = schedule_status["number"]
     check = HourlyLineCheck.objects.filter(
         production_line=line,
         article=article,

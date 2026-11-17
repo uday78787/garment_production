@@ -179,105 +179,118 @@ class FactoryShift(TimeStampedModel):
     @classmethod
     def get_active_shift_for_factory(cls, factory, current_dt=None):
         active_shifts = cls.objects.filter(factory=factory, active=True).order_by("start_time")
-        dt = timezone.localtime(current_dt) if current_dt else timezone.localtime()
-        active_now = [shift for shift in active_shifts if shift.is_active_at(dt)]
-        if active_now:
-            return active_now[0]
-        if active_shifts:
-            return active_shifts.first()
-        return None
-
-    def current_hour_window(self, current_dt=None):
-        now = timezone.localtime(current_dt) if current_dt else timezone.localtime()
-        start_time = self._coerce_time(self.start_time)
-        end_time = self._coerce_time(self.end_time)
-        overtime_start = self._coerce_time(self.overtime_start_time)
-        if start_time is None or end_time is None:
-            raise ValueError("Shift start and end times must be valid.")
-
-        shift_start_dt = timezone.make_aware(datetime.combine(now.date(), start_time), timezone.get_current_timezone())
-        if start_time <= end_time:
-            shift_end_dt = timezone.make_aware(datetime.combine(now.date(), end_time), timezone.get_current_timezone())
-        else:
-            shift_end_dt = timezone.make_aware(datetime.combine(now.date() + timedelta(days=1), end_time), timezone.get_current_timezone())
-            if now.time() < end_time:
-                shift_start_dt -= timedelta(days=1)
-
-        if now < shift_start_dt:
-            shift_start_dt -= timedelta(days=1)
-
-        if overtime_start:
-            overtime_start_dt = timezone.make_aware(datetime.combine(now.date(), overtime_start), timezone.get_current_timezone())
-            if now.time() < overtime_start:
-                overtime_start_dt -= timedelta(days=1)
-            if now >= overtime_start_dt:
-                shift_end_dt = max(shift_end_dt, overtime_start_dt + timedelta(hours=self.overtime_hours))
-
-        elapsed_seconds = max((now - shift_start_dt).total_seconds(), 0)
-        current_hour_index = min(int(elapsed_seconds // 3600), int((shift_end_dt - shift_start_dt).total_seconds() // 3600) - 1)
-        hour_start = shift_start_dt + timedelta(hours=current_hour_index)
-        hour_end = min(hour_start + timedelta(hours=1), shift_end_dt)
-        return hour_start, hour_end
+        return next(
+            (
+                shift for shift in active_shifts
+                if shift.current_schedule_status(current_dt=current_dt) is not None
+            ),
+            None,
+        )
 
     def current_hour_label(self, current_dt=None):
         status = self.current_schedule_status(current_dt)
-        return status["label"]
+        return status["label"] if status else None
+
+    def has_current_manpower(self, production_lines=None, entry_date=None):
+        entries = self.manpower_entries.filter(
+            factory=self.factory,
+            entry_date=entry_date or timezone.localdate(),
+        )
+        if production_lines is not None:
+            entries = entries.filter(production_line__in=production_lines)
+        return entries.exists()
 
     def current_schedule_status(self, current_dt=None):
-        """Return the configured hour number and break state for dashboard use."""
+        """Return the configured hour active now, or None outside scheduled hours."""
         now = timezone.localtime(current_dt) if current_dt else timezone.localtime()
-        current_time = now.time()
-        for item in self.hourly_schedule or []:
-            try:
-                hour_number = int(item.get("hour"))
-                start = self._coerce_time(item.get("start"))
-                end = self._coerce_time(item.get("end"))
-                break_start = self._coerce_time(item.get("break_start"))
-                break_end = self._coerce_time(item.get("break_end"))
-            except (AttributeError, TypeError, ValueError):
-                continue
-            if not start or not end:
-                continue
-            in_hour = (
-                start <= current_time < end
-                if start < end
-                else current_time >= start or current_time < end
-            )
-            if in_hour:
-                on_break = bool(
-                    break_start is not None
-                    and break_end is not None
-                    and break_start != break_end
-                    and (
-                        break_start <= current_time < break_end
-                        if break_start < break_end
-                        else current_time >= break_start or current_time < break_end
+        schedule = self.hourly_schedule or []
+        if not schedule:
+            return None
+
+        timezone_info = timezone.get_current_timezone()
+        for day_offset in (-1, 0):
+            anchor_date = now.date() + timedelta(days=day_offset)
+            previous_end = None
+            for item in schedule:
+                try:
+                    hour_number = int(item.get("hour"))
+                    start = self._coerce_time(item.get("start"))
+                    end = self._coerce_time(item.get("end"))
+                    break_start = self._coerce_time(item.get("break_start"))
+                    break_end = self._coerce_time(item.get("break_end"))
+                    if start is None or end is None:
+                        continue
+
+                    start_minute = start.hour * 60 + start.minute
+                    start_day = item.get("start_day")
+                    if start_day is None:
+                        start_day = (previous_end // 1440) if previous_end is not None else 0
+                        while start_minute + start_day * 1440 < (previous_end or 0):
+                            start_day += 1
+                    start_minute += int(start_day) * 1440
+
+                    end_minute = end.hour * 60 + end.minute
+                    end_day = item.get("end_day")
+                    if end_day is None:
+                        end_day = start_minute // 1440
+                        while end_minute + end_day * 1440 <= start_minute:
+                            end_day += 1
+                    end_minute += int(end_day) * 1440
+                    if end_minute <= start_minute:
+                        continue
+
+                    start_dt = timezone.make_aware(
+                        datetime.combine(anchor_date, time.min)
+                        + timedelta(minutes=start_minute),
+                        timezone_info,
                     )
-                )
-                break_label = (
-                    f"Break {break_start.strftime('%H:%M')} - {break_end.strftime('%H:%M')}"
-                    if on_break and break_start is not None and break_end is not None
-                    else ""
-                )
+                    end_dt = timezone.make_aware(
+                        datetime.combine(anchor_date, time.min)
+                        + timedelta(minutes=end_minute),
+                        timezone_info,
+                    )
+                    previous_end = end_minute
+                except (AttributeError, TypeError, ValueError):
+                    continue
+
+                if not start_dt <= now < end_dt:
+                    continue
+
+                break_start_dt = break_end_dt = None
+                if break_start and break_end:
+                    break_start_minute = break_start.hour * 60 + break_start.minute
+                    break_start_day = start_minute // 1440
+                    while break_start_minute + break_start_day * 1440 < start_minute:
+                        break_start_day += 1
+                    break_start_minute += break_start_day * 1440
+                    break_end_minute = break_end.hour * 60 + break_end.minute
+                    break_end_day = break_start_minute // 1440
+                    while break_end_minute + break_end_day * 1440 <= break_start_minute:
+                        break_end_day += 1
+                    break_end_minute += break_end_day * 1440
+                    break_start_dt = timezone.make_aware(
+                        datetime.combine(anchor_date, time.min)
+                        + timedelta(minutes=break_start_minute),
+                        timezone_info,
+                    )
+                    break_end_dt = timezone.make_aware(
+                        datetime.combine(anchor_date, time.min)
+                        + timedelta(minutes=break_end_minute),
+                        timezone_info,
+                    )
+
+                on_break = bool(break_start_dt and break_end_dt and break_start_dt <= now < break_end_dt)
                 return {
                     "number": hour_number,
                     "label": str(item.get("name") or f"Hour {hour_number}"),
                     "window": f"{start.strftime('%H:%M')} - {end.strftime('%H:%M')}",
                     "on_break": on_break,
-                    "break_label": break_label,
+                    "break_label": (
+                        f"Break {break_start.strftime('%H:%M')} - {break_end.strftime('%H:%M')}"
+                        if on_break else ""
+                    ),
                 }
-        hour_start, hour_end = self.current_hour_window(current_dt)
-        shift_start = self._coerce_time(self.start_time)
-        if shift_start is None:
-            raise ValueError("Shift start time must be a valid time.")
-        fallback_number = max(int((hour_start - timezone.make_aware(datetime.combine(hour_start.date(), shift_start), timezone.get_current_timezone())).total_seconds() // 3600) + 1, 1)
-        return {
-            "number": fallback_number,
-            "label": f"Hour {fallback_number}",
-            "window": f"{hour_start.strftime('%H:%M')} - {hour_end.strftime('%H:%M')}",
-            "on_break": False,
-            "break_label": "",
-        }
+        return None
 
 class LineShiftManpower(TimeStampedModel):
     factory = models.ForeignKey(Factory, on_delete=models.PROTECT, related_name="line_shift_manpower")
