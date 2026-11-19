@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16.16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
@@ -41,7 +41,7 @@ services:
         condition: service_healthy
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.30.7-alpine
     restart: unless-stopped
     ports:
       - "${NGINX_BIND_ADDRESS:-127.0.0.1}:80:80"

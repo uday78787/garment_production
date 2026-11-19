@@ -1,13 +1,14 @@
 from datetime import datetime
-from mimetypes import guess_type
+from pathlib import PurePosixPath
 from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied
-from django.http import FileResponse, HttpResponse
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET
@@ -30,6 +31,17 @@ from .permissions import (
     quality_scope,
     user_can_access_quality_line,
 )
+from .uploads import sanitize_defect_image
+
+
+DEFECT_IMAGE_CONTENT_TYPES = {
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 
 def _quality_querysets(request):
@@ -57,7 +69,12 @@ def defect_image(request, image_path):
     ):
         raise PermissionDenied("You do not have access to this production line.")
 
-    content_type = guess_type(detail.defect_image.name)[0] or "application/octet-stream"
+    content_type = DEFECT_IMAGE_CONTENT_TYPES.get(
+        PurePosixPath(detail.defect_image.name).suffix.lower()
+    )
+    if content_type is None:
+        raise Http404
+
     if settings.DEBUG:
         response = FileResponse(
             detail.defect_image.open("rb"),
@@ -296,6 +313,22 @@ def hourly_check_create(request):
             return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
 
         total_repaired = sum(row[2] for row in defect_rows)
+        defect_images = {}
+        try:
+            for defect_code, defect_quantity, _, _ in defect_rows:
+                if not defect_quantity or defect_code in defect_images:
+                    continue
+                image_file = request.FILES.get(
+                    f"defect_image_{defect_code}"
+                ) or request.FILES.get("defect_image")
+                if image_file:
+                    defect_images[defect_code] = sanitize_defect_image(image_file)
+        except ValidationError:
+            messages.error(
+                request,
+                "Defect images must be valid PNG, JPEG, or WebP images no larger than 10 MB.",
+            )
+            return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
 
         check = HourlyLineCheck.objects.create(
             factory=line.factory,
@@ -319,14 +352,21 @@ def hourly_check_create(request):
             defect = DefectMaster.objects.filter(defect_code=defect_code).first()
             if defect is None:
                 continue
-            image_file = request.FILES.get(f"defect_image_{defect_code}") or request.FILES.get("defect_image")
             HourlyLineCheckDetail.objects.create(
                 hourly_check=check,
                 defect=defect,
                 defect_quantity=defect_quantity,
                 repaired_quantity=repaired_quantity,
                 resolved=resolved or repaired_quantity == defect_quantity,
-                defect_image=image_file,
+                defect_image=(
+                    SimpleUploadedFile(
+                        "defect.png",
+                        defect_images[defect_code],
+                        content_type="image/png",
+                    )
+                    if defect_code in defect_images
+                    else None
+                ),
                 created_by=request.user,
             )
 

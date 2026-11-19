@@ -167,7 +167,7 @@ def _build_line_output_chart(rows):
             "tension": 0.25,
             "spanGaps": False,
         })
-    return json.dumps(labels), json.dumps(datasets)
+    return labels, datasets
 
 
 @admin_required
@@ -717,8 +717,8 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
             dhu = (total_defects / total_output * 100) if total_output else 0
             context["chart_labels"] = chart_labels
             context["chart_line_datasets"] = chart_line_datasets
-            context["chart_output_series"] = json.dumps(output_series)
-            context["chart_efficiency_series"] = json.dumps(efficiency_series)
+            context["chart_output_series"] = output_series
+            context["chart_efficiency_series"] = efficiency_series
             context["kpi_total_output"] = total_output
             context["kpi_total_defects"] = total_defects
             context["kpi_dhu"] = round(dhu, 2)
@@ -836,8 +836,8 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
 
             context["chart_labels"] = chart_labels
             context["chart_line_datasets"] = chart_line_datasets
-            context["chart_output_series"] = json.dumps(output_series)
-            context["chart_efficiency_series"] = json.dumps(efficiency_series)
+            context["chart_output_series"] = output_series
+            context["chart_efficiency_series"] = efficiency_series
             total_output = sum(output_series)
             total_defects = sum(float(row["defect_pieces"] or 0) for row in entries.values("defect_pieces"))
             dhu = (total_defects / total_output * 100) if total_output else 0

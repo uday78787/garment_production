@@ -1,6 +1,5 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-import json
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -179,13 +178,13 @@ class DailyDetailExportTests(TestCase):
         response = self.client.get(reverse("dashboard:admin_dashboard"))
 
         self.assertEqual(response.status_code, 200)
-        datasets = json.loads(response.context["chart_line_datasets"])
-        chart_labels = json.loads(response.context["chart_labels"])
+        datasets = response.context["chart_line_datasets"]
+        chart_labels = response.context["chart_labels"]
         self.assertEqual([dataset["label"] for dataset in datasets], ["Line 1", "Line 2"])
         today_index = chart_labels.index(today.strftime("%d-%b"))
         self.assertEqual([dataset["data"][today_index] for dataset in datasets], [125.0, 75.0])
         self.assertEqual(sum(dataset["data"][today_index] for dataset in datasets), response.context["kpi_total_output"])
-        efficiency_series = json.loads(response.context["chart_efficiency_series"])
+        efficiency_series = response.context["chart_efficiency_series"]
         self.assertEqual(efficiency_series[today_index], response.context["kpi_avg_efficiency"])
         self.assertContains(response, "type: 'bar'")
         self.assertContains(response, "label: 'Average Efficiency'")
@@ -193,6 +192,34 @@ class DailyDetailExportTests(TestCase):
         self.assertContains(response, "pointRadius: 4")
         self.assertContains(response, "Efficiency (%)")
         self.assertContains(response, "context.parsed.y}%")
+
+    def test_admin_dashboard_escapes_untrusted_chart_labels(self):
+        line = self.factory.production_lines.get(line_name="Line 1")
+        line.line_name = "</script><script>window.pwned=1</script>"
+        line.save(update_fields=["line_name"])
+        assignment = LineAssignment.objects.get(production_line=line)
+        DailyProductionEntry.objects.create(
+            assignment=assignment,
+            production_date=timezone.localdate(),
+            actual_manpower=10,
+            working_minutes=60,
+            actual_output=10,
+            planned_efficiency=Decimal("0.50"),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(reverse("dashboard:admin_dashboard"))
+
+        self.assertEqual(
+            response.context["chart_line_datasets"][0]["label"],
+            "</script><script>window.pwned=1</script>",
+        )
+        self.assertContains(
+            response,
+            r"\u003C/script\u003E\u003Cscript\u003Ewindow.pwned=1\u003C/script\u003E",
+        )
+        self.assertNotContains(response, "</script><script>window.pwned=1</script>")
 
     def test_admin_dashboard_current_hour_uses_configured_hour_label(self):
         factory = Factory.objects.create(name="Factory 2", code="FAC2")

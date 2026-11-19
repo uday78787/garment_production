@@ -399,12 +399,16 @@
 {% endblock %}
 
 {% block extra_js %}
+{{ chart_labels|json_script:"admin-chart-labels" }}
+{{ chart_line_datasets|json_script:"admin-chart-line-datasets" }}
+{{ chart_efficiency_series|json_script:"admin-chart-efficiency-series" }}
 <script>
 (() => {
-const labels = {{ chart_labels|safe }};
+const chartData = id => JSON.parse(document.getElementById(id).textContent);
+const labels = chartData('admin-chart-labels');
 new Chart(document.getElementById('outputChart'), {
     type: 'bar',
-    data: { labels: labels, datasets: {{ chart_line_datasets|safe }} },
+    data: { labels: labels, datasets: chartData('admin-chart-line-datasets') },
     options: {
         responsive: true,
         interaction: { mode: 'index', intersect: false },
@@ -422,7 +426,7 @@ new Chart(document.getElementById('efficiencyChart'), {
     type: 'line',
     data: { labels: labels, datasets: [{
         label: 'Average Efficiency',
-        data: {{ chart_efficiency_series|safe }},
+        data: chartData('admin-chart-efficiency-series'),
         borderColor: '#198754',
         backgroundColor: '#198754',
         pointRadius: 4,

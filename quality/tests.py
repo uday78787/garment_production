@@ -1,20 +1,25 @@
 from datetime import timedelta
 from decimal import Decimal
+from io import BytesIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+from PIL import Image
 
 from accounts.models import UserProfile
 from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLine
 from planning.models import LineAssignment, ProductionOrder
 from quality.calculations import calculate_defect_rate, calculate_dhu, calculate_fpy
 from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail, InspectionDefect, QualityInspection
+from quality.uploads import sanitize_defect_image
 
 
 class QualityCalculationsTest(TestCase):
@@ -263,6 +268,70 @@ class HourlyQualityCheckTest(TestCase):
             "/_protected_media/quality/defects/test.png",
         )
 
+    def test_defect_image_rejects_unsupported_file_extensions(self):
+        detail = self._create_defect_image_detail()
+        detail.defect_image = "quality/defects/attack.html"
+        detail.save(update_fields=["defect_image"])
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.save()
+        self.user.profile.assigned_lines.add(self.line)
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            reverse(
+                "quality_private_defect_image",
+                kwargs={"image_path": detail.defect_image.name},
+            )
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_hourly_check_rejects_non_image_upload_before_creating_check(self):
+        LineAssignment.objects.create(
+            production_line=self.line,
+            production_order=self.order,
+            start_date="2026-09-01",
+            default_manpower=30,
+            working_minutes_per_operator=480,
+            start_efficiency="0.25",
+            daily_efficiency_growth="0.05",
+            max_efficiency="0.60",
+        )
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.assigned_lines.add(self.line)
+        self.user.profile.save()
+        self.client.force_login(self.user)
+        defect = DefectMaster.objects.create(
+            defect_code="D-BAD-IMAGE",
+            defect_name="Invalid Image",
+        )
+        upload = SimpleUploadedFile(
+            "not-an-image.png",
+            b"<script>window.pwned = true</script>",
+            content_type="image/png",
+        )
+
+        response = self.client.post(
+            reverse("quality:hourly_check_create"),
+            {
+                "production_line": self.line.pk,
+                "article": self.article.pk,
+                "inspected_quantity": "10",
+                "passed_quantity": "9",
+                "defect_code": defect.defect_code,
+                "defect_quantity": "1",
+                "repaired_quantity": "0",
+                "defect_image": upload,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Defect images must be valid PNG, JPEG, or WebP images")
+        self.assertFalse(HourlyLineCheck.objects.filter(production_line=self.line).exists())
+
+
     def test_qa_dashboard_article_switch_filters_data_and_assigned_article_choices(self):
         another_article = Article.objects.create(
             article_code="A-201",
@@ -483,23 +552,37 @@ class HourlyQualityCheckTest(TestCase):
             category=DefectMaster.Category.SEWING,
             severity=DefectMaster.Severity.MINOR,
         )
+        image_bytes = BytesIO()
+        Image.new("RGB", (2, 2), color="red").save(image_bytes, format="JPEG")
 
-        response = self.client.post(
-            reverse("quality:hourly_check_create"),
-            {
-                "production_line": self.line.pk,
-                "production_order": self.order.pk,
-                "article": self.article.pk,
-                "inspected_quantity": "100",
-                "passed_quantity": "95",
-                "defect_code": defect.defect_code,
-                "defect_quantity": "5",
-                "repaired_quantity": "5",
-                "resolved": "on",
-            },
-        )
+        with TemporaryDirectory() as media_root:
+            with self.settings(MEDIA_ROOT=media_root):
+                response = self.client.post(
+                    reverse("quality:hourly_check_create"),
+                    {
+                        "production_line": self.line.pk,
+                        "production_order": self.order.pk,
+                        "article": self.article.pk,
+                        "inspected_quantity": "100",
+                        "passed_quantity": "95",
+                        "defect_code": defect.defect_code,
+                        "defect_quantity": "5",
+                        "repaired_quantity": "5",
+                        "resolved": "on",
+                        "defect_image": SimpleUploadedFile(
+                            "attacker.html",
+                            image_bytes.getvalue(),
+                            content_type="text/html",
+                        ),
+                    },
+                )
+                detail = HourlyLineCheckDetail.objects.get(defect=defect)
+                with detail.defect_image.open("rb") as sanitized_file:
+                    sanitized_bytes = sanitized_file.read()
 
         self.assertRedirects(response, reverse("quality:hourly_check_list"))
+        self.assertTrue(detail.defect_image.name.endswith(".png"))
+        self.assertTrue(sanitized_bytes.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue(HourlyLineCheck.objects.filter(production_line=self.line, inspected_quantity=100).exists())
         dashboard_response = self.client.get(reverse("dashboard:qa_dashboard"))
         self.assertEqual(dashboard_response.context["qa_shift_passed"], 100)
@@ -676,6 +759,33 @@ class HourlyQualityCheckTest(TestCase):
         self.assertEqual(payload["shift_totals"]["passed"], 6)
         self.assertEqual(len(payload["hourly_report"]), 2)
         self.assertIn("pending_repairs", payload)
+
+
+class DefectImageSanitizationTest(TestCase):
+    def test_sanitization_reencodes_valid_image_with_a_safe_png_extension(self):
+        image_bytes = BytesIO()
+        Image.new("RGB", (2, 2), color="red").save(image_bytes, format="JPEG")
+        uploaded_file = SimpleUploadedFile(
+            "attacker.html",
+            image_bytes.getvalue(),
+            content_type="text/html",
+        )
+
+        sanitized = sanitize_defect_image(uploaded_file)
+
+        self.assertTrue(sanitized.startswith(b"\x89PNG\r\n\x1a\n"))
+        with Image.open(BytesIO(sanitized)) as image:
+            self.assertEqual(image.format, "PNG")
+
+    def test_sanitization_rejects_html_disguised_as_png(self):
+        uploaded_file = SimpleUploadedFile(
+            "attacker.png",
+            b"<script>window.pwned = true</script>",
+            content_type="image/png",
+        )
+
+        with self.assertRaises(ValidationError):
+            sanitize_defect_image(uploaded_file)
 
 
 class QAPermissionTest(TestCase):
