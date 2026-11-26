@@ -15,7 +15,7 @@ from django.utils import timezone
 from PIL import Image
 
 from accounts.models import UserProfile
-from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLine
+from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLine, Size
 from planning.models import LineAssignment, ProductionOrder
 from quality.calculations import calculate_defect_rate, calculate_dhu, calculate_fpy
 from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail, InspectionDefect, QualityInspection
@@ -39,6 +39,7 @@ class QualityInspectionIntegrationTest(TestCase):
             default_working_minutes=480,
         )
         self.article = Article.objects.create(article_code="A-100", article_name="T-Shirt", sam=Decimal("12.5"))
+        self.size = Size.objects.create(name="Medium")
         self.order = ProductionOrder.objects.create(
             order_number="PO-1001",
             article=self.article,
@@ -55,6 +56,7 @@ class QualityInspectionIntegrationTest(TestCase):
             production_line=self.line,
             production_order=self.order,
             article=self.article,
+            size=self.size,
             buyer="Buyer A",
             inspected_quantity=1000,
             passed_quantity=940,
@@ -77,6 +79,53 @@ class QualityInspectionIntegrationTest(TestCase):
         self.assertEqual(inspection.total_defects, 60)
         self.assertAlmostEqual(inspection.dhu, 6.0)
         self.assertAlmostEqual(inspection.fpy, 94.0)
+
+    def test_inspection_form_saves_selected_master_size(self):
+        LineAssignment.objects.create(
+            production_line=self.line,
+            production_order=self.order,
+            start_date="2026-09-01",
+            default_manpower=30,
+            start_efficiency="0.25",
+            daily_efficiency_growth="0.05",
+            max_efficiency="0.60",
+        )
+        user = get_user_model().objects.create_superuser(
+            username="inspection-size-admin",
+            email="inspection-size-admin@example.com",
+            password="test-password",
+        )
+        self.client.force_login(user)
+
+        response = self.client.post(
+            reverse("quality:inspection_create"),
+            {
+                "inspection_date": "2026-09-10",
+                "factory": self.factory.pk,
+                "production_line": self.line.pk,
+                "production_order": self.order.pk,
+                "article": self.article.pk,
+                "size": self.size.pk,
+                "inspected_quantity": "10",
+                "passed_quantity": "10",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        inspection = QualityInspection.objects.get(inspection_number__startswith="QI-")
+        self.assertEqual(inspection.size, self.size)
+
+    def test_inspection_form_lists_master_sizes(self):
+        user = get_user_model().objects.create_superuser(
+            username="inspection-size-viewer",
+            email="inspection-size-viewer@example.com",
+            password="test-password",
+        )
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("quality:inspection_create"))
+
+        self.assertContains(response, f'<option value="{self.size.pk}">{self.size.name}</option>')
 
 
 class QualityDefectMasterPageTest(TestCase):
@@ -112,6 +161,7 @@ class HourlyQualityCheckTest(TestCase):
             default_working_minutes=480,
         )
         self.article = Article.objects.create(article_code="A-200", article_name="Formal Shirt", sam=Decimal("12.5"))
+        self.size = Size.objects.create(name="Medium")
         self.order = ProductionOrder.objects.create(
             order_number="PO-2001",
             article=self.article,
@@ -124,7 +174,7 @@ class HourlyQualityCheckTest(TestCase):
         now = timezone.localtime()
         start_dt = now - timedelta(minutes=30)
         end_dt = now + timedelta(minutes=30)
-        shift = FactoryShift.objects.create(
+        self.shift = FactoryShift.objects.create(
             factory=self.factory,
             shift_name="Current Shift",
             start_time=start_dt.strftime("%H:%M"),
@@ -144,11 +194,67 @@ class HourlyQualityCheckTest(TestCase):
         LineShiftManpower.objects.create(
             factory=self.factory,
             production_line=self.line,
-            shift=shift,
+            shift=self.shift,
             entry_date=timezone.localdate(),
             manpower=20,
             entered_by=self.user,
         )
+
+    def test_hourly_check_form_lists_master_sizes(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("quality:hourly_check_create"))
+
+        self.assertContains(response, f'<option value="{self.size.pk}">{self.size.name}</option>')
+
+    def test_hourly_check_cannot_be_recorded_during_a_scheduled_break(self):
+        now = timezone.localtime()
+        start_dt = now - timedelta(minutes=30)
+        end_dt = now + timedelta(minutes=30)
+        break_start = now - timedelta(minutes=5)
+        break_end = now + timedelta(minutes=5)
+        self.shift.hourly_schedule = [{
+            "hour": 1,
+            "name": "LUNCH BREAK",
+            "start": start_dt.strftime("%H:%M"),
+            "end": end_dt.strftime("%H:%M"),
+            "start_day": 0,
+            "end_day": int(end_dt.date() > start_dt.date()),
+            "break_start": break_start.strftime("%H:%M"),
+            "break_end": break_end.strftime("%H:%M"),
+        }]
+        self.shift.save()
+        LineAssignment.objects.create(
+            production_line=self.line,
+            production_order=self.order,
+            start_date=timezone.localdate(),
+            default_manpower=20,
+            working_minutes_per_operator=480,
+            start_efficiency=Decimal("0.25"),
+            daily_efficiency_growth=Decimal("0.05"),
+            max_efficiency=Decimal("0.60"),
+        )
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.factory = self.factory
+        self.user.profile.assigned_lines.add(self.line)
+        self.user.profile.save()
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("quality:hourly_check_create"),
+            {
+                "production_line": self.line.pk,
+                "production_order": self.order.pk,
+                "article": self.article.pk,
+                "size": self.size.pk,
+                "inspected_quantity": "10",
+                "passed_quantity": "10",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Quality checks cannot be recorded during")
+        self.assertFalse(HourlyLineCheck.objects.filter(production_line=self.line).exists())
 
     def _create_defect_image_detail(self):
         check = HourlyLineCheck.objects.create(
@@ -318,6 +424,7 @@ class HourlyQualityCheckTest(TestCase):
             {
                 "production_line": self.line.pk,
                 "article": self.article.pk,
+                "size": self.size.pk,
                 "inspected_quantity": "10",
                 "passed_quantity": "9",
                 "defect_code": defect.defect_code,
@@ -563,6 +670,7 @@ class HourlyQualityCheckTest(TestCase):
                         "production_line": self.line.pk,
                         "production_order": self.order.pk,
                         "article": self.article.pk,
+                        "size": self.size.pk,
                         "inspected_quantity": "100",
                         "passed_quantity": "95",
                         "defect_code": defect.defect_code,
@@ -589,6 +697,8 @@ class HourlyQualityCheckTest(TestCase):
         self.assertEqual(dashboard_response.context["qa_shift_defects"], 5)
         self.assertEqual(dashboard_response.context["qa_current_hour_inspected"], 100)
         self.assertEqual(dashboard_response.context["qa_current_hour_passed"], 100)
+        check = HourlyLineCheck.objects.get(production_line=self.line, inspected_quantity=100)
+        self.assertEqual(check.size, self.size)
 
     def test_checker_can_mark_repair_and_pass_defect_from_dashboard(self):
         LineAssignment.objects.create(

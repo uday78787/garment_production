@@ -5,6 +5,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.models import UserProfile
 from master_data.models import Factory, FactoryShift, LineShiftManpower, ProductionLine
 
 
@@ -19,6 +20,37 @@ class ShiftManagementTests(TestCase):
         self.other_factory = Factory.objects.create(name="South Factory", code="SOUTH")
         self.url = reverse("dashboard:shift_management")
         self.client.force_login(self.user)
+
+    def test_superuser_with_qa_profile_sees_admin_navigation(self):
+        self.user.profile.role = UserProfile.Role.QA_PERMISSION
+        self.user.profile.save()
+
+        response = self.client.get(reverse("dashboard:admin_dashboard"))
+
+        self.assertContains(response, "Admin Dashboard")
+        self.assertContains(response, "Factory Filter")
+        self.assertContains(response, "Shift Management")
+        self.assertContains(response, "Department Process Flow")
+        self.assertNotContains(response, "Live Time (IST)")
+
+    def test_factory_admin_sees_admin_navigation_without_superuser_links(self):
+        admin_user = get_user_model().objects.create_user(
+            username="factory-admin",
+            password="secure-test-password",
+        )
+        admin_user.profile.role = UserProfile.Role.FACTORY_ADMIN
+        admin_user.profile.factory = self.factory
+        admin_user.profile.save()
+        self.client.force_login(admin_user)
+
+        response = self.client.get(reverse("dashboard:admin_dashboard"))
+
+        self.assertContains(response, "Admin Dashboard")
+        self.assertContains(response, "Section Management")
+        self.assertContains(response, "Article Process Flows")
+        self.assertContains(response, "Defect Database")
+        self.assertNotContains(response, "Factory Filter")
+        self.assertNotContains(response, "Shift Management")
 
     @staticmethod
     def shift_payload(factory, **overrides):
@@ -217,6 +249,7 @@ class ShiftManagementTests(TestCase):
             shift_id=str(shift.pk),
             shift_name="Updated Day Shift",
             hour_1_end="09:45",
+            hour_2_name="Sewing Setup",
         )
 
         response = self.client.post(self.url, payload)
@@ -224,8 +257,47 @@ class ShiftManagementTests(TestCase):
         self.assertRedirects(response, f"{self.url}?factory={self.factory.pk}")
         shift.refresh_from_db()
         self.assertEqual(shift.shift_name, "Updated Day Shift")
+        self.assertEqual(shift.hourly_schedule[0]["name"], "Hour 1")
+        self.assertEqual(shift.hourly_schedule[1]["name"], "Sewing Setup")
         self.assertEqual(shift.hourly_schedule[0]["end"], "09:45")
         self.assertEqual(shift.shift_minutes, 555)
+
+    def test_custom_hour_label_after_break_is_preserved_when_saving_shift(self):
+        shift = FactoryShift.objects.create(
+            factory=self.factory,
+            shift_name="Day Shift",
+            start_time="09:00",
+            end_time="13:30",
+            standard_hours=5,
+            hourly_schedule=[],
+        )
+        payload = self.shift_payload(
+            self.factory,
+            shift_id=str(shift.pk),
+            shift_name="Updated Day Shift",
+            end_time="13:30",
+            hour_count="5",
+        )
+        payload.update({
+            "hour_1_start": "09:00", "hour_1_end": "10:00",
+            "hour_2_start": "10:00", "hour_2_end": "11:00",
+            "hour_3_start": "11:00", "hour_3_end": "12:00",
+            "hour_4_name": "LUNCH BREAK",
+            "hour_4_start": "12:00", "hour_4_end": "12:30",
+            "hour_4_break_start": "12:00", "hour_4_break_end": "12:30",
+            "hour_5_name": "Hour 4",
+            "hour_5_start": "12:30", "hour_5_end": "13:30",
+        })
+
+        response = self.client.post(self.url, payload)
+
+        self.assertRedirects(response, f"{self.url}?factory={self.factory.pk}")
+        shift.refresh_from_db()
+        self.assertEqual(shift.hourly_schedule[3]["name"], "LUNCH BREAK")
+        self.assertEqual(shift.hourly_schedule[4]["name"], "Hour 4")
+        self.assertEqual(shift.scheduled_hour_label(5), "Hour 4")
+        self.assertEqual(shift.scheduled_hour_working_minutes(4), 0)
+        self.assertEqual(shift.scheduled_hour_working_minutes(5), 60)
 
     def test_shift_editor_saves_added_hour_names_and_day_offsets(self):
         shift = FactoryShift.objects.create(

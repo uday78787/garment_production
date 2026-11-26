@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Record Section Output{% endblock %}
+{% block content %}
+<h3><i class="fa-solid fa-industry"></i> Record Output: {{ step.operation_name|default:step.section_name }}</h3>
+<p class="text-muted">
+    {{ step.section_name }} | Order {{ process.production_order.order_number }} | {{ process.factory.name }} |
+    Previous-section quantity available: {{ step.available_input_quantity }} pcs
+</p>
+{% if step.quality_criteria %}
+<div class="alert alert-info"><strong>Quality criteria for this section:</strong><br>{{ step.quality_criteria|linebreaksbr }}</div>
+{% endif %}
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+            {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+            {% for field in form %}
+            <div class="mb-3">
+                <label class="form-label fw-semibold">{{ field.label }}</label>
+                {{ field }}
+                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
+            </div>
+            {% endfor %}
+            <button type="submit" class="btn btn-primary">Save Section Output</button>
+            <a href="{% url 'production:process_detail' process.pk %}" class="btn btn-outline-secondary">Cancel</a>
+        </form>
+    </div>
+</div>
+{% endblock %}

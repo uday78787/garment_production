@@ -276,8 +276,6 @@
         const removeButton = row.querySelector('.remove-shift-hour');
         removeButton.setAttribute('aria-label', `Remove hour ${number}`);
         removeButton.disabled = rows.length <= 1;
-        const nameInput = row.querySelector('input[name$="_name"]');
-        if (!nameInput.value || /^Hour \d+$/.test(nameInput.value)) nameInput.value = `Hour ${number}`;
       });
       const count = rows.length;
       form.querySelector('[name="hour_count"]').value = String(count);

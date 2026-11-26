@@ -40,28 +40,8 @@ from quality.models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail,
 
 def _schedule_working_minutes(shift, hour_number):
     """Return the working minutes represented by one QA check hour."""
-    for item in shift.hourly_schedule or []:
-        if str(item.get("hour")) != str(hour_number):
-            continue
-        try:
-            start = time.fromisoformat(str(item.get("start")))
-            end = time.fromisoformat(str(item.get("end")))
-            start_minutes = start.hour * 60 + start.minute
-            end_minutes = end.hour * 60 + end.minute
-            if end_minutes <= start_minutes:
-                end_minutes += 24 * 60
-            minutes = end_minutes - start_minutes
-            break_start = item.get("break_start")
-            break_end = item.get("break_end")
-            if break_start and break_end:
-                pause_start = time.fromisoformat(str(break_start))
-                pause_end = time.fromisoformat(str(break_end))
-                pause_minutes = (pause_end.hour * 60 + pause_end.minute) - (pause_start.hour * 60 + pause_start.minute)
-                minutes -= max(pause_minutes, 0)
-            return max(minutes, 0)
-        except (TypeError, ValueError):
-            break
-    return 60
+    minutes = shift.scheduled_hour_working_minutes(hour_number)
+    return minutes if minutes is not None else 60
 
 
 def _daily_detail_rows(request):
@@ -565,8 +545,15 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                 shift__shift_name=check.shift_name,
             ).select_related("shift").order_by("-id").first()
             manpower = manpower_entry.manpower if manpower_entry else 0
-            working_minutes = manpower_entry.working_minutes if manpower_entry else 60
+            working_minutes = (
+                _schedule_working_minutes(manpower_entry.shift, check.check_hour)
+                if manpower_entry else 60
+            )
             available_minutes = Decimal(manpower) * Decimal(working_minutes)
+            shift_available_minutes = (
+                Decimal(manpower) * Decimal(manpower_entry.working_minutes)
+                if manpower_entry else Decimal("0")
+            )
             defect_total = check.details.aggregate(total=Sum("defect_quantity"))["total"] or 0
             produced_minutes = Decimal(check.inspected_quantity or 0) * Decimal(check.article.sam)
             assignment = LineAssignment.objects.filter(
@@ -586,9 +573,9 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                     assignment.max_efficiency,
                 )
                 target_output = calc.target_output(
-                    calc.planned_productive_minutes(available_minutes, planned_efficiency),
+                    calc.planned_productive_minutes(shift_available_minutes, planned_efficiency),
                     check.article.sam,
-                ) if available_minutes else Decimal("0")
+                ) if shift_available_minutes else Decimal("0")
 
             line = line_summary_by_line.setdefault(
                 check.production_line_id,
@@ -609,15 +596,16 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                     "hourly_rows": [],
                 },
             )
-            hourly_planned_output = Decimal("0")
-            if manpower_entry:
-                hourly_planned_output = calc.hourly_target(
-                    manpower_entry.manpower,
-                    check.article.sam,
-                    planned_efficiency,
-                )
+            hourly_planned_output = calc.target_output(
+                calc.planned_productive_minutes(available_minutes, planned_efficiency),
+                check.article.sam,
+            ) if available_minutes else Decimal("0")
             hour_payload = {
                 "check_hour": check.check_hour,
+                "label": (
+                    manpower_entry.shift.scheduled_hour_label(check.check_hour)
+                    if manpower_entry else f"Hour {check.check_hour}"
+                ),
                 "shift_name": check.shift_name or "Unassigned",
                 "target_output": hourly_planned_output,
                 "actual_output": check.inspected_quantity,
@@ -625,7 +613,7 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
                 "dhu": (Decimal(defect_total) / Decimal(check.inspected_quantity or 0) * Decimal("100")) if check.inspected_quantity else Decimal("0"),
                 "hourly_efficiency": (Decimal(check.inspected_quantity or 0) / hourly_planned_output * Decimal("100")) if hourly_planned_output else Decimal("0"),
                 "manpower": manpower,
-                "available_minutes": Decimal(manpower) * Decimal("60") if manpower else Decimal("0"),
+                "available_minutes": available_minutes,
                 "produced_minutes": produced_minutes,
             }
             line["hourly_rows"].append(hour_payload)

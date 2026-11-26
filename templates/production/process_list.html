@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Order Process Flows{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h3><i class="fa-solid fa-diagram-project"></i> Department Process Flows</h3>
+        <p class="text-muted mb-0">Follow each order through its assigned factory sections and quality gates.</p>
+    </div>
+    {% if can_manage_processes %}
+    <a href="{% url 'production:process_setup' %}" class="btn btn-primary">
+        <i class="fa-solid fa-plus"></i> Assign Flow to Order
+    </a>
+    {% endif %}
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body table-responsive">
+        <table class="table table-striped table-hover">
+            <thead>
+                <tr><th>Order</th><th>Article</th><th>Factory</th><th>Operations</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for process in processes %}
+                <tr>
+                    <td>{{ process.production_order.order_number }}</td>
+                    <td>{{ process.production_order.article.article_code }} - {{ process.production_order.article.article_name }}</td>
+                    <td>{{ process.factory.name }}</td>
+                    <td>{{ process.steps.count }}</td>
+                    <td>
+                        {% if process.is_complete %}
+                        <span class="badge text-bg-success">Completed</span>
+                        {% else %}
+                        <span class="badge text-bg-primary">In Progress</span>
+                        {% endif %}
+                    </td>
+                    <td><a href="{% url 'production:process_detail' process.pk %}" class="btn btn-sm btn-outline-primary">Open Flow</a></td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-center text-muted py-4">No order process flows are assigned yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

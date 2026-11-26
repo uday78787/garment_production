@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Order Process - {{ process.production_order.order_number }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <h3><i class="fa-solid fa-diagram-project"></i> Order Process: {{ process.production_order.order_number }}</h3>
+        <div class="text-muted">
+            {{ process.production_order.article.article_code }} - {{ process.production_order.article.article_name }}
+            | {{ process.factory.name }} | Order quantity: {{ process.production_order.order_quantity }} pcs
+        </div>
+    </div>
+    <a href="{% url 'production:process_list' %}" class="btn btn-outline-secondary">Back to Flows</a>
+</div>
+
+{% if process.is_complete %}
+<div class="alert alert-success"><strong>Order process complete.</strong> The full order quantity passed the final section's quality check.</div>
+{% else %}
+<div class="alert alert-info">Only quality-passed quantity is released to the next section. Failed quantity is scrapped and cannot move forward.</div>
+{% endif %}
+
+{% for step in steps %}
+<div class="card shadow-sm mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">{{ step.sequence }}. {{ step.operation_name|default:step.section_name }}</h5>
+        <span class="text-muted small">{{ step.section_name }}</span>
+        {% if step.available_input_quantity > 0 %}
+        <a href="{% url 'production:process_batch_create' process.pk step.pk %}" class="btn btn-sm btn-primary">
+            Record Section Output ({{ step.available_input_quantity }} pcs available)
+        </a>
+        {% else %}
+        <span class="badge text-bg-secondary">Waiting for previous section output</span>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        {% if step.quality_criteria %}
+        <div class="alert alert-light border">
+            <strong>Quality criteria:</strong><br>
+            {{ step.quality_criteria|linebreaksbr }}
+        </div>
+        {% endif %}
+        {% if step.operation_description %}
+        <p>{{ step.operation_description }}</p>
+        {% endif %}
+        {% if step.operation_details.machine_equipment or step.operation_details.standard_time_minutes %}
+        <div class="small text-muted mb-3">
+            {% if step.operation_details.machine_equipment %}Machine/equipment: {{ step.operation_details.machine_equipment }}{% endif %}
+            {% if step.operation_details.standard_time_minutes %} | Standard time: {{ step.operation_details.standard_time_minutes }} min{% endif %}
+        </div>
+        {% endif %}
+        <div class="row g-2 mb-3">
+            <div class="col-md-4"><strong>Available to process now:</strong> {{ step.available_input_quantity }} pcs</div>
+            <div class="col-md-4"><strong>Passed QC at this section:</strong> {{ step.passed_quantity }} pcs</div>
+            <div class="col-md-4"><strong>Section batches:</strong> {{ step.batches.count }}</div>
+        </div>
+
+        {% for batch in step.batches.all %}
+        <div class="border rounded p-3 mb-2">
+            <div class="d-flex flex-wrap justify-content-between gap-2">
+                <div>
+                    <strong>Batch {{ forloop.counter }}</strong>:
+                    {{ batch.input_quantity }} pcs in / {{ batch.output_quantity }} pcs output
+                    <span class="text-muted">by {{ batch.entered_by.get_username }} on {{ batch.created_at|date:"d M Y H:i" }}</span>
+                </div>
+                {% if batch.uninspected_quantity > 0 %}
+                <a href="{% url 'production:process_quality_check_create' process.pk batch.pk %}" class="btn btn-sm btn-outline-primary">
+                    Quality Check ({{ batch.uninspected_quantity }} pcs pending)
+                </a>
+                {% else %}
+                <span class="badge text-bg-success">Output fully inspected</span>
+                {% endif %}
+            </div>
+            {% if batch.field_values %}
+            <div class="small mt-2">
+                {% for key, value in batch.field_values.items %}
+                <span class="me-3"><strong>{{ key }}:</strong> {{ value }}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if batch.notes %}<div class="small mt-2"><strong>Notes:</strong> {{ batch.notes }}</div>{% endif %}
+            {% if batch.quality_checks.count %}
+            <div class="table-responsive mt-2">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>QC Date</th><th>Inspected</th><th>Passed</th><th>Scrapped</th><th>Remarks</th><th>Inspector</th></tr></thead>
+                    <tbody>
+                        {% for check in batch.quality_checks.all %}
+                        <tr>
+                            <td>{{ check.created_at|date:"d M Y H:i" }}</td>
+                            <td>{{ check.inspected_quantity }}</td>
+                            <td>{{ check.passed_quantity }}</td>
+                            <td>{{ check.rejected_quantity }}</td>
+                            <td>{{ check.remarks|default:"-" }}</td>
+                            <td>{{ check.checked_by.get_username }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+        {% empty %}
+        <p class="text-muted mb-0">No output recorded for this section yet.</p>
+        {% endfor %}
+    </div>
+</div>
+{% endfor %}
+{% endblock %}

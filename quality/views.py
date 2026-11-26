@@ -13,7 +13,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET
 
-from master_data.models import Article, Factory, FactoryShift, ProductionLine
+from master_data.models import Article, Factory, FactoryShift, ProductionLine, Size
 from planning.models import ProductionOrder
 
 from .calculations import calculate_defect_rate, calculate_dhu, calculate_fpy
@@ -124,7 +124,7 @@ def quality_dashboard(request):
 def inspection_list(request):
     _, lines, _, _ = quality_scope(request.user)
     inspections = QualityInspection.objects.select_related(
-        "production_line", "production_order", "article", "factory"
+        "production_line", "production_order", "article", "factory", "size"
     ).filter(production_line__in=lines).order_by("-inspection_date")
     return render(request, "quality/inspection_list.html", {"inspections": inspections})
 
@@ -133,6 +133,15 @@ def inspection_list(request):
 def inspection_create(request):
     factories, production_lines, production_orders, articles = _quality_querysets(request)
     defects = DefectMaster.objects.filter(active=True).order_by("defect_code")
+    sizes = Size.objects.order_by("name")
+    context = {
+        "factories": factories,
+        "production_lines": production_lines,
+        "production_orders": production_orders,
+        "articles": articles,
+        "defects": defects,
+        "sizes": sizes,
+    }
 
     if request.method == "POST":
         inspection_number = request.POST.get("inspection_number") or f"QI-{datetime.now():%Y%m%d%H%M%S}"
@@ -141,9 +150,13 @@ def inspection_create(request):
         line = production_lines.filter(pk=line_id, factory_id=factory_id).first()
         order = production_orders.filter(pk=request.POST.get("production_order"), assignments__production_line=line).first()
         article = articles.filter(pk=request.POST.get("article"), orders=order).first() if order else None
-        if not line or not order or not article:
-            messages.error(request, "Select a factory, line, order, and article within your assigned access.")
-            return render(request, "quality/inspection_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": production_orders, "articles": articles, "defects": defects})
+        size = sizes.filter(pk=request.POST.get("size")).first()
+        if not line or not order or not article or not size:
+            messages.error(
+                request,
+                "Select a factory, line, order, article, and size within your assigned access.",
+            )
+            return render(request, "quality/inspection_form.html", context)
         inspection = QualityInspection.objects.create(
             inspection_number=inspection_number,
             inspection_date=request.POST.get("inspection_date") or datetime.now().date(),
@@ -151,6 +164,7 @@ def inspection_create(request):
             production_line=line,
             production_order=order,
             article=article,
+            size=size,
             buyer=request.POST.get("buyer") or "",
             inspection_type=request.POST.get("inspection_type") or "END_LINE",
             inspector=request.user,
@@ -182,17 +196,7 @@ def inspection_create(request):
         messages.success(request, "Inspection created successfully.")
         return render(request, "quality/inspection_success.html", {"inspection": inspection})
 
-    return render(
-        request,
-        "quality/inspection_form.html",
-        {
-            "factories": factories,
-            "production_lines": production_lines,
-            "production_orders": production_orders,
-            "articles": articles,
-            "defects": defects,
-        },
-    )
+    return render(request, "quality/inspection_form.html", context)
 
 
 @login_required
@@ -241,8 +245,34 @@ def add_defect_master(request):
 @login_required
 def hourly_check_list(request):
     _, lines, _, _ = quality_scope(request.user)
-    checks = HourlyLineCheck.objects.filter(production_line__in=lines).select_related("production_line", "article", "production_order", "factory", "checker").order_by("-check_date", "-check_hour")
+    checks = list(HourlyLineCheck.objects.filter(production_line__in=lines).select_related(
+        "production_line", "article", "production_order", "factory", "checker", "size"
+    ).order_by("-check_date", "-check_hour"))
+    _attach_hour_labels(checks)
     return render(request, "quality/hourly_check_list.html", {"checks": checks})
+
+
+def _attach_hour_labels(checks):
+    checks = list(checks)
+    if not checks:
+        return checks
+
+    factory_ids = {check.factory_id for check in checks}
+    shift_names = {check.shift_name for check in checks if check.shift_name}
+    shifts = {
+        (shift.factory_id, shift.shift_name): shift
+        for shift in FactoryShift.objects.filter(
+            factory_id__in=factory_ids,
+            shift_name__in=shift_names,
+        )
+    }
+    for check in checks:
+        shift = shifts.get((check.factory_id, check.shift_name))
+        check.hour_label = (
+            shift.scheduled_hour_label(check.check_hour)
+            if shift else f"Hour {check.check_hour}"
+        )
+    return checks
 
 
 @login_required
@@ -255,6 +285,19 @@ def hourly_check_create(request):
     profile = getattr(request.user, "profile", None)
     assigned_lines = production_lines.filter(pk__in=profile.assigned_lines.values("pk")) if profile else production_lines.none()
     selected_line = assigned_lines.first() if assigned_lines.count() == 1 else None
+    defects = DefectMaster.objects.filter(active=True).order_by("defect_code")
+    sizes = Size.objects.order_by("name")
+    form_context = {
+        "factories": factories,
+        "production_lines": production_lines,
+        "production_orders": running_orders,
+        "articles": running_articles,
+        "running_articles": running_articles,
+        "defects": defects,
+        "sizes": sizes,
+        "assigned_lines": assigned_lines,
+        "selected_line": selected_line,
+    }
     if request.method == "POST":
         factory_id = profile.factory_id if profile else None
         line_id = selected_line.pk if selected_line else request.POST.get("production_line")
@@ -267,9 +310,10 @@ def hourly_check_create(request):
         line = production_lines.filter(pk=line_id, factory_id=factory_id).first()
         article = running_articles.filter(pk=article_id).first()
         order = running_orders.filter(article=article).order_by("delivery_date").first() if article else None
-        if not line or not order or not article:
-            messages.error(request, "Select an assigned line and a running factory article.")
-            return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
+        size = sizes.filter(pk=request.POST.get("size")).first()
+        if not line or not order or not article or not size:
+            messages.error(request, "Select an assigned line, running article, and valid size.")
+            return render(request, "quality/hourly_check_form.html", form_context)
 
         current_shift = FactoryShift.get_active_shift_for_factory(line.factory)
         schedule_status = current_shift.current_schedule_status() if current_shift else None
@@ -282,14 +326,20 @@ def hourly_check_create(request):
                 request,
                 "A scheduled current hour and updated IE manpower are required before recording a check.",
             )
-            return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
+            return render(request, "quality/hourly_check_form.html", form_context)
+        if schedule_status["on_break"]:
+            messages.error(
+                request,
+                f"Quality checks cannot be recorded during {schedule_status['break_label']}.",
+            )
+            return render(request, "quality/hourly_check_form.html", form_context)
 
         try:
             inspected_quantity = int(request.POST.get("inspected_quantity") or 0)
             passed_quantity = int(request.POST.get("passed_quantity") or 0)
         except (TypeError, ValueError):
             messages.error(request, "Inspected and passed quantities must be whole numbers.")
-            return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
+            return render(request, "quality/hourly_check_form.html", form_context)
 
         defect_rows = []
         for index, defect_code in enumerate(defect_code_values):
@@ -300,17 +350,17 @@ def hourly_check_create(request):
                 repaired_quantity = int(repaired_quantity_values[index] or 0)
             except (IndexError, TypeError, ValueError):
                 messages.error(request, "Defect and repair quantities must be whole numbers.")
-                return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
+                return render(request, "quality/hourly_check_form.html", form_context)
             if defect_quantity < 0 or repaired_quantity < 0 or repaired_quantity > defect_quantity:
                 messages.error(request, "Repaired quantity cannot exceed defective quantity.")
-                return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
+                return render(request, "quality/hourly_check_form.html", form_context)
             is_resolved = index < len(resolved_values) and resolved_values[index] == "on"
             defect_rows.append((defect_code, defect_quantity, repaired_quantity, is_resolved))
 
         total_defective = sum(row[1] for row in defect_rows)
         if passed_quantity + total_defective > inspected_quantity:
             messages.error(request, "Passed plus defective pieces cannot exceed inspected pieces.")
-            return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
+            return render(request, "quality/hourly_check_form.html", form_context)
 
         total_repaired = sum(row[2] for row in defect_rows)
         defect_images = {}
@@ -328,13 +378,14 @@ def hourly_check_create(request):
                 request,
                 "Defect images must be valid PNG, JPEG, or WebP images no larger than 10 MB.",
             )
-            return render(request, "quality/hourly_check_form.html", {"factories": factories, "production_lines": production_lines, "production_orders": running_orders, "articles": running_articles, "running_articles": running_articles, "defects": DefectMaster.objects.filter(active=True).order_by("defect_code")})
+            return render(request, "quality/hourly_check_form.html", form_context)
 
         check = HourlyLineCheck.objects.create(
             factory=line.factory,
             production_line=line,
             production_order=order,
             article=article,
+            size=size,
             check_date=timezone.localdate(),
             check_hour=schedule_status["number"],
             shift_name=current_shift.shift_name,
@@ -373,26 +424,15 @@ def hourly_check_create(request):
         messages.success(request, "Hourly end-of-line quality check saved.")
         return redirect("quality:hourly_check_list")
 
-    return render(
-        request,
-        "quality/hourly_check_form.html",
-        {
-            "factories": factories,
-            "production_lines": production_lines,
-            "production_orders": running_orders,
-            "articles": running_articles,
-            "running_articles": running_articles,
-            "defects": DefectMaster.objects.filter(active=True).order_by("defect_code"),
-            "assigned_lines": assigned_lines,
-            "selected_line": selected_line,
-        },
-    )
+    return render(request, "quality/hourly_check_form.html", form_context)
 
 
 @login_required
 def article_defect_bulletin(request):
     _, lines, _, _ = quality_scope(request.user)
-    inspections = QualityInspection.objects.filter(production_line__in=lines).select_related("production_line", "production_order", "article", "factory")
+    inspections = QualityInspection.objects.filter(production_line__in=lines).select_related(
+        "production_line", "production_order", "article", "factory", "size"
+    )
     return render(
         request,
         "quality/article_defect_bulletin.html",
@@ -403,7 +443,9 @@ def article_defect_bulletin(request):
 @login_required
 def export_article_defect_bulletin_excel(request):
     _, lines, _, _ = quality_scope(request.user)
-    inspections = QualityInspection.objects.filter(production_line__in=lines).select_related("production_line", "production_order", "article", "factory")
+    inspections = QualityInspection.objects.filter(production_line__in=lines).select_related(
+        "production_line", "production_order", "article", "factory", "size"
+    )
     return build_quality_excel_response(inspections, filename_prefix="quality_bulletin")
 
 
@@ -413,7 +455,9 @@ def export_article_defect_bulletin_pdf(request):
     from weasyprint import HTML
 
     _, lines, _, _ = quality_scope(request.user)
-    inspections = QualityInspection.objects.filter(production_line__in=lines).select_related("production_line", "production_order", "article", "factory")
+    inspections = QualityInspection.objects.filter(production_line__in=lines).select_related(
+        "production_line", "production_order", "article", "factory", "size"
+    )
     html = render_to_string(
         "quality/article_defect_bulletin_pdf.html",
         {"inspections": inspections, "generated_at": datetime.now()},
@@ -445,6 +489,8 @@ def defect_database(request):
     ).select_related(
         "defect",
         "hourly_check__article",
+        "hourly_check__size",
+        "hourly_check__size",
         "hourly_check__production_line",
         "hourly_check__factory",
         "created_by",
@@ -481,10 +527,12 @@ def defect_database(request):
         defects = defects.filter(created_by_id=int(user_id))
     if tracking_code:
         defects = defects.filter(tracking_code__icontains=tracking_code)
+    defect_records = list(defects)
+    _attach_hour_labels(record.hourly_check for record in defect_records)
 
     user_model = get_user_model()
     context = {
-        "defect_records": defects,
+        "defect_records": defect_records,
         "articles": articles.order_by("article_code"),
         "lines": lines.order_by("line_name"),
         "defect_types": DefectMaster.objects.filter(active=True).order_by("defect_code"),
@@ -505,7 +553,12 @@ def export_defect_database_excel(request):
     records = HourlyLineCheckDetail.objects.filter(
         hourly_check__production_line__in=lines,
     ).select_related(
-        "defect", "hourly_check__article", "hourly_check__production_line", "created_by"
+        "defect",
+        "hourly_check__article",
+        "hourly_check__size",
+        "hourly_check__size",
+        "hourly_check__production_line",
+        "created_by",
     ).order_by("-hourly_check__check_date", "-hourly_check__check_hour", "-marked_at")
     filters = request.GET
     if filters.get("article", "").isdigit():
@@ -531,14 +584,17 @@ def export_defect_database_excel(request):
 
     import pandas as pd
 
+    records = list(records)
+    _attach_hour_labels(record.hourly_check for record in records)
     rows = [{
         "Defect Code": record.tracking_code,
         "Article": record.hourly_check.article.article_code,
+        "Size": record.hourly_check.size.name if record.hourly_check.size_id else "",
         "Date": record.hourly_check.check_date,
         "Time": timezone.localtime(record.marked_at).strftime("%H:%M:%S"),
         "Defect Type": record.defect.defect_code,
         "Defect Name": record.defect.defect_name,
-        "Hour": record.hourly_check.check_hour,
+        "Hour": record.hourly_check.hour_label,
         "Line": record.hourly_check.production_line.line_name,
         "User ID": record.created_by.username if record.created_by else "",
         "Defect Qty": record.defect_quantity,

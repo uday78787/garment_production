@@ -165,7 +165,7 @@
                                     <tbody>
                                         {% for hour in row.hourly_rows %}
                                         <tr>
-                                            <td>Hour {{ hour.check_hour }}</td>
+                                            <td>{{ hour.label }}</td>
                                             <td class="text-end">{{ hour.actual_output|floatformat:0 }}</td>
                                             <td class="text-end">{{ hour.actual_output|floatformat:0 }}</td>
                                             <td class="text-end">{{ hour.defect_quantity|floatformat:0 }}</td>

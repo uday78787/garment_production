@@ -8,11 +8,13 @@ the factory holiday calendar.
 from datetime import datetime, time, timedelta
 
 from django.conf import settings
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.exceptions import ValidationError
+from django.core.validators import FileExtensionValidator, MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
 from common.models import TimeStampedModel
+from master_data.validators import validate_article_file_size
 
 
 class Factory(TimeStampedModel):
@@ -164,6 +166,61 @@ class FactoryShift(TimeStampedModel):
             total_minutes += duration
             previous_end = end_minute
         return total_minutes
+
+    def scheduled_hour_label(self, hour_number):
+        for item in self.hourly_schedule or []:
+            if not isinstance(item, dict):
+                raise ValueError("Shift schedule entries must be objects.")
+            if str(item.get("hour")) == str(hour_number):
+                return str(item.get("name") or f"Hour {hour_number}")
+        return f"Hour {hour_number}"
+
+    def scheduled_hour_working_minutes(self, hour_number):
+        for item in self.hourly_schedule or []:
+            if not isinstance(item, dict):
+                raise ValueError("Shift schedule entries must be objects.")
+            if str(item.get("hour")) != str(hour_number):
+                continue
+
+            start = self._coerce_time(item.get("start"))
+            end = self._coerce_time(item.get("end"))
+            if start is None or end is None:
+                raise ValueError("Shift schedule entries must have valid start and end times.")
+
+            start_minute = start.hour * 60 + start.minute + int(item.get("start_day", 0)) * 1440
+            end_minute = end.hour * 60 + end.minute
+            end_day = item.get("end_day")
+            if end_day is None:
+                end_day = start_minute // 1440
+                while end_minute + end_day * 1440 <= start_minute:
+                    end_day += 1
+            end_minute += int(end_day) * 1440
+            if end_minute <= start_minute:
+                raise ValueError("Shift hour end time must be after its start time.")
+
+            working_minutes = end_minute - start_minute
+            break_start = self._coerce_time(item.get("break_start"))
+            break_end = self._coerce_time(item.get("break_end"))
+            if bool(break_start) != bool(break_end):
+                raise ValueError("Shift breaks must have both start and end times.")
+            if break_start and break_end:
+                break_start_minute = break_start.hour * 60 + break_start.minute
+                break_start_day = start_minute // 1440
+                while break_start_minute + break_start_day * 1440 < start_minute:
+                    break_start_day += 1
+                break_start_minute += break_start_day * 1440
+
+                break_end_minute = break_end.hour * 60 + break_end.minute
+                break_end_day = break_start_minute // 1440
+                while break_end_minute + break_end_day * 1440 <= break_start_minute:
+                    break_end_day += 1
+                break_end_minute += break_end_day * 1440
+                if not start_minute <= break_start_minute < break_end_minute <= end_minute:
+                    raise ValueError("Shift breaks must fall within their configured hour.")
+                working_minutes -= break_end_minute - break_start_minute
+
+            return max(working_minutes, 0)
+        return None
 
     def is_active_at(self, current_dt=None):
         now = timezone.localtime(current_dt) if current_dt else timezone.localtime()
@@ -378,6 +435,17 @@ class ProductionLine(TimeStampedModel):
         return self.line_name
 
 
+class Size(TimeStampedModel):
+    name = models.CharField(max_length=50, unique=True, verbose_name="Size")
+
+    class Meta(TimeStampedModel.Meta):
+        abstract = False
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class Article(TimeStampedModel):
     """A style/article the factory produces. Also referred to as 'Style'."""
 
@@ -390,6 +458,48 @@ class Article(TimeStampedModel):
         verbose_name="SAM",
         help_text="Standard Allotted Minutes to produce one piece.",
     )
+    quality_checklist_enabled = models.BooleanField(
+        default=False,
+        verbose_name="Enable quality checklist",
+        help_text="Use the factory-specific quality checklist for this article.",
+    )
+    category = models.CharField(max_length=100, blank=True)
+    subcategory = models.CharField(max_length=100, blank=True, verbose_name="Sub-category")
+    color = models.CharField(max_length=100, blank=True)
+    size = models.ForeignKey(
+        Size,
+        on_delete=models.PROTECT,
+        related_name="articles",
+        null=True,
+        blank=True,
+    )
+    article_image = models.ImageField(
+        upload_to="articles/images/%Y/%m/%d/",
+        blank=True,
+        validators=[validate_article_file_size],
+    )
+    measurement_bulletin = models.FileField(
+        upload_to="articles/bulletins/%Y/%m/%d/",
+        blank=True,
+        validators=[
+            FileExtensionValidator(
+                allowed_extensions=("pdf", "doc", "docx", "xls", "xlsx", "csv", "txt")
+            ),
+            validate_article_file_size,
+        ],
+        help_text="PDF, Word, Excel, CSV, or text file; maximum 10 MB.",
+    )
+    operation_bulletin = models.FileField(
+        upload_to="articles/bulletins/%Y/%m/%d/",
+        blank=True,
+        validators=[
+            FileExtensionValidator(
+                allowed_extensions=("pdf", "doc", "docx", "xls", "xlsx", "csv", "txt")
+            ),
+            validate_article_file_size,
+        ],
+        help_text="PDF, Word, Excel, CSV, or text file; maximum 10 MB.",
+    )
 
     class Meta(TimeStampedModel.Meta):
         abstract = False
@@ -397,6 +507,57 @@ class Article(TimeStampedModel):
 
     def __str__(self):
         return f"{self.article_code} - {self.article_name}"
+
+
+class ArticleMeasurementPoint(TimeStampedModel):
+    article = models.ForeignKey(
+        Article,
+        on_delete=models.CASCADE,
+        related_name="measurement_points",
+    )
+    factory = models.ForeignKey(
+        Factory,
+        on_delete=models.PROTECT,
+        related_name="article_measurement_points",
+    )
+    pom = models.CharField(max_length=100, verbose_name="POM")
+    description = models.CharField(max_length=200, blank=True)
+    size = models.ForeignKey(
+        Size,
+        on_delete=models.PROTECT,
+        related_name="article_measurement_points",
+        null=True,
+        blank=True,
+    )
+    target_measurement = models.DecimalField(
+        max_digits=10,
+        decimal_places=3,
+        validators=[MinValueValidator(0)],
+    )
+    tolerance = models.DecimalField(
+        max_digits=10,
+        decimal_places=3,
+        validators=[MinValueValidator(0)],
+        null=True,
+        blank=True,
+        verbose_name="Tolerance (+/-)",
+    )
+    unit = models.CharField(max_length=30, blank=True)
+    remark = models.TextField(blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        abstract = False
+        ordering = ["pom", "size__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("article", "factory", "pom", "size"),
+                name="unique_article_factory_measurement_pom_size",
+            )
+        ]
+
+    def __str__(self):
+        size = f" ({self.size})" if self.size_id else ""
+        return f"{self.article.article_code} - {self.pom}{size}"
 
 
 class Holiday(models.Model):

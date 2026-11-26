@@ -16,6 +16,7 @@
             <th>Hour</th>
             <th>Line</th>
             <th>Article</th>
+            <th>Size</th>
             <th>Inspected</th>
             <th>Passed</th>
             <th>Defective</th>
@@ -27,9 +28,10 @@
           {% for check in checks %}
           <tr>
             <td>{{ check.check_date }}</td>
-            <td>H{{ check.check_hour }}</td>
+            <td>{{ check.hour_label }}</td>
             <td>{{ check.production_line }}</td>
             <td>{{ check.article }}</td>
+            <td>{{ check.size|default:"-" }}</td>
             <td>{{ check.inspected_quantity }}</td>
             <td>{{ check.passed_quantity }}</td>
             <td>{{ check.defective_quantity }}</td>
@@ -37,7 +39,7 @@
             <td>{{ check.checker.get_full_name|default:check.checker.username }}</td>
           </tr>
           {% empty %}
-          <tr><td colspan="9" class="text-center text-muted">No hourly checks recorded yet.</td></tr>
+          <tr><td colspan="10" class="text-center text-muted">No hourly checks recorded yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>

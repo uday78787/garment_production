@@ -430,6 +430,66 @@ class DailyDetailExportTests(TestCase):
         self.assertEqual(summary.working_minutes, 480)
         self.assertEqual(summary.shift_name, "Day Shift")
 
+    def test_hourly_production_uses_custom_label_and_excludes_break_minutes(self):
+        line = self.factory.production_lines.first()
+        article = Article.objects.get(article_code="ART")
+        order = ProductionOrder.objects.get(order_number="PO-1")
+        shift = FactoryShift.objects.create(
+            factory=self.factory,
+            shift_name="Day Shift",
+            start_time="09:00",
+            end_time="13:30",
+            shift_minutes=240,
+            hourly_schedule=[
+                {"hour": 1, "name": "Hour 1", "start": "09:00", "end": "10:00", "break_start": "", "break_end": ""},
+                {"hour": 2, "name": "Hour 2", "start": "10:00", "end": "11:00", "break_start": "", "break_end": ""},
+                {"hour": 3, "name": "Hour 3", "start": "11:00", "end": "12:00", "break_start": "", "break_end": ""},
+                {"hour": 4, "name": "LUNCH BREAK", "start": "12:00", "end": "12:30", "break_start": "12:00", "break_end": "12:30"},
+                {"hour": 5, "name": "Hour 4", "start": "12:30", "end": "13:30", "break_start": "", "break_end": ""},
+            ],
+        )
+        day = timezone.localdate()
+        LineShiftManpower.objects.create(
+            factory=self.factory,
+            production_line=line,
+            shift=shift,
+            entry_date=day,
+            manpower=20,
+            entered_by=self.user,
+        )
+        check = HourlyLineCheck.objects.create(
+            factory=self.factory,
+            production_line=line,
+            production_order=order,
+            article=article,
+            check_date=day,
+            check_hour=5,
+            shift_name=shift.shift_name,
+            inspected_quantity=10,
+            passed_quantity=10,
+            created_by=self.user,
+        )
+
+        summary = HourlyLineSummary.objects.get(
+            production_line=line,
+            summary_date=day,
+            check_hour=5,
+        )
+        session = self.client.session
+        session["selected_factory_id"] = self.factory.pk
+        session.save()
+        response = self.client.get(
+            reverse("dashboard:admin_dashboard"),
+            {"line_summary_date": day.isoformat()},
+        )
+        hourly_row = response.context["line_summary_report"][0]["hourly_rows"][0]
+
+        self.assertEqual(summary.working_minutes, 60)
+        self.assertEqual(summary.available_minutes, Decimal("1200"))
+        self.assertEqual(hourly_row["label"], "Hour 4")
+        self.assertEqual(hourly_row["available_minutes"], Decimal("1200"))
+        self.assertContains(response, "Hour 4")
+
     def test_line_summary_lines_are_scoped_to_selected_factory(self):
         other_factory = Factory.objects.create(name="Factory 2", code="FAC2")
         other_line = ProductionLine.objects.create(factory=other_factory, line_name="Other Line", capacity_manpower=20)

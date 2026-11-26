@@ -1,0 +1,72 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">Home</a>
+  &rsaquo; <a href="{{ changelist_url }}">Articles</a>
+  &rsaquo; {{ article.article_code }} Bulletin Settings
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+  <p>
+    Configure Measurement, Operation, and Defect Bulletins for
+    <strong>{{ article.article_code }} - {{ article.article_name }}</strong>.
+    Existing uploaded bulletin files remain optional attachments.
+  </p>
+
+  <form method="get" class="module">
+    <label for="factory">Assigned Factory</label>
+    <select name="factory" id="factory">
+      <option value="">Select a factory</option>
+      {% for factory in factories %}
+        <option value="{{ factory.pk }}"{% if selected_factory.pk == factory.pk %} selected{% endif %}>
+          {{ factory.name }} ({{ factory.code }})
+        </option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="button">Open Bulletins</button>
+  </form>
+
+  {% if selected_factory %}
+    <p>
+      CSV imports replace only the selected bulletin type for this Article and Factory.
+      Existing orders keep their saved process-flow snapshot.
+    </p>
+
+    {% for bulletin in bulletin_cards %}
+      <div class="module">
+        <h2>{{ bulletin.title }}</h2>
+        <p>
+          <a class="button" href="{{ bulletin.manual_add_url }}">Add manually</a>
+          <a class="button" href="{{ bulletin.manual_list_url }}">View / edit entries</a>
+          <a class="button" href="{{ bulletin.export_url }}">Export CSV</a>
+          <a href="{{ bulletin.sample_url }}" download>Download sample CSV</a>
+        </p>
+        <form method="post" enctype="multipart/form-data">
+          {% csrf_token %}
+          <input type="hidden" name="factory_id" value="{{ selected_factory.pk }}">
+          <input type="hidden" name="bulletin_type" value="{{ bulletin.type }}">
+          <label for="file-{{ bulletin.type }}">Import CSV</label>
+          <input
+            type="file"
+            name="bulletin_file"
+            id="file-{{ bulletin.type }}"
+            accept=".csv,text/csv"
+            required
+          >
+          <p>
+            <label>
+              <input type="checkbox" name="confirm_replace" value="1" required>
+              I understand this replaces the current {{ bulletin.title }} rows for this Article and Factory.
+            </label>
+          </p>
+          <button type="submit" class="button">Import and replace</button>
+        </form>
+      </div>
+    {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

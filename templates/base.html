@@ -14,7 +14,7 @@
 <body class="bg-light">
 
 {% if user.is_authenticated %}
-    {% if user.profile.role == 'QA_PERMISSION' %}
+    {% if user.profile.role == 'QA_PERMISSION' and not user.is_superuser and not user.profile.is_admin %}
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container-fluid">
             <a class="navbar-brand d-flex align-items-center gap-2" href="{% url 'dashboard:qa_dashboard' %}">
@@ -34,6 +34,7 @@
                 </span>
                 <span class="text-white-50">|</span>
                 <span class="fw-semibold" id="qa-live-time">Live Time (IST)</span>
+                <a class="btn btn-outline-light btn-sm" href="{% url 'production:process_list' %}">Department Process Flow</a>
                 <form method="post" action="{% url 'accounts:logout' %}" class="d-inline ms-2">
                     {% csrf_token %}
                     <button type="submit" class="btn btn-outline-light btn-sm px-3 py-1">Logout</button>
@@ -92,7 +93,20 @@
                             <li><a class="dropdown-item" href="{% url 'admin:auth_user_changelist' %}"><i class="fa-solid fa-users"></i> Factory Users</a></li>
                             <li><a class="dropdown-item" href="{% url 'admin:accounts_userprofile_changelist' %}"><i class="fa-solid fa-user-shield"></i> User Roles &amp; Locations</a></li>
                             {% endif %}
+                            {% if user.is_superuser or user.profile.is_admin %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="{% url 'admin:planning_factorysection_changelist' %}"><i class="fa-solid fa-list-ol"></i> Section Management</a></li>
+                            <li><a class="dropdown-item" href="{% url 'admin:planning_articleprocessflow_changelist' %}"><i class="fa-solid fa-diagram-project"></i> Article Process Flows</a></li>
+                            {% if user.is_superuser %}
+                            <li><a class="dropdown-item" href="{% url 'admin:planning_sectioneavfield_changelist' %}"><i class="fa-solid fa-sliders"></i> EAV Field Settings</a></li>
+                            {% endif %}
+                            {% endif %}
                         </ul>
+                    </li>
+                    {% endif %}
+                    {% if user.is_superuser or user.profile.is_admin or user.profile.role == 'SUPERVISOR' or user.profile.role == 'QA_PERMISSION' %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'production:process_list' %}"><i class="fa-solid fa-diagram-project"></i> Department Process Flow</a>
                     </li>
                     {% endif %}
                     {% if user.is_superuser %}

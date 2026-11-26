@@ -1,7 +1,57 @@
 from django.contrib import admin
 
-from .models import DefectMaster, HourlyLineCheck, HourlyLineCheckDetail, QualityHold, QualityInspection
+from common.admin import FactoryScopedAdminMixin
+from master_data.models import Factory
+from .models import (
+    ArticleDefectBulletin,
+    DefectMaster,
+    HourlyLineCheck,
+    HourlyLineCheckDetail,
+    QualityHold,
+    QualityInspection,
+)
 from .permissions import quality_scope
+
+
+@admin.register(ArticleDefectBulletin)
+class ArticleDefectBulletinAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
+    list_display = (
+        "article",
+        "factory",
+        "defect_code",
+        "defect_name",
+        "category",
+        "operation",
+        "severity",
+    )
+    list_filter = ("factory", "category", "severity")
+    search_fields = (
+        "article__article_code",
+        "article__article_name",
+        "defect_code",
+        "defect_name",
+        "operation",
+    )
+    list_select_related = ("article", "factory")
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        for field in ("article", "factory"):
+            if request.GET.get(field):
+                initial[field] = request.GET[field]
+        return initial
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "factory" and not request.user.is_superuser:
+            profile = getattr(request.user, "profile", None)
+            if profile and profile.is_admin:
+                factory_ids = list(profile.accessible_factories.values_list("pk", flat=True))
+                if profile.factory_id:
+                    factory_ids.append(profile.factory_id)
+                kwargs["queryset"] = Factory.objects.filter(pk__in=factory_ids).distinct()
+            else:
+                kwargs["queryset"] = Factory.objects.none()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
 class QualityFactoryScopedAdmin(admin.ModelAdmin):
@@ -30,8 +80,9 @@ class DefectMasterAdmin(admin.ModelAdmin):
 
 @admin.register(HourlyLineCheck)
 class HourlyLineCheckAdmin(QualityFactoryScopedAdmin):
-    list_display = ("check_date", "production_line", "article", "check_hour", "inspected_quantity", "passed_quantity", "defective_quantity", "checker")
-    list_filter = ("check_date", "production_line", "article", "status")
+    list_display = ("check_date", "production_line", "article", "size", "check_hour", "inspected_quantity", "passed_quantity", "defective_quantity", "checker")
+    list_filter = ("check_date", "production_line", "article", "size", "status")
+    list_select_related = ("size",)
     search_fields = ("production_line__line_name", "article__article_code", "checker__username")
 
 
@@ -44,8 +95,9 @@ class HourlyLineCheckDetailAdmin(QualityFactoryScopedAdmin):
 
 @admin.register(QualityInspection)
 class QualityInspectionAdmin(QualityFactoryScopedAdmin):
-    list_display = ("inspection_number", "inspection_date", "production_line", "article", "inspected_quantity", "passed_quantity", "rejected_quantity", "status")
-    list_filter = ("status", "inspection_type", "inspection_date")
+    list_display = ("inspection_number", "inspection_date", "production_line", "article", "size", "inspected_quantity", "passed_quantity", "rejected_quantity", "status")
+    list_filter = ("status", "inspection_type", "inspection_date", "size")
+    list_select_related = ("size",)
     search_fields = ("inspection_number", "article__article_code", "production_line__line_name")
 
 

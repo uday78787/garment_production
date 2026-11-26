@@ -8,7 +8,7 @@ from django.utils import timezone
 import secrets
 
 from common.models import TimeStampedModel
-from master_data.models import Article, Factory, ProductionLine, LineShiftManpower
+from master_data.models import Article, Factory, ProductionLine, LineShiftManpower, Size
 from planning.models import ProductionOrder
 
 
@@ -70,6 +70,46 @@ class DefectMaster(TimeStampedModel):
         return created
 
 
+class ArticleDefectBulletin(TimeStampedModel):
+    article = models.ForeignKey(
+        Article,
+        on_delete=models.CASCADE,
+        related_name="defect_bulletin_entries",
+    )
+    factory = models.ForeignKey(
+        Factory,
+        on_delete=models.PROTECT,
+        related_name="article_defect_bulletins",
+    )
+    defect_code = models.CharField(max_length=50)
+    defect_name = models.CharField(max_length=120)
+    category = models.CharField(max_length=80, blank=True)
+    operation = models.CharField(max_length=150, blank=True)
+    description = models.TextField(blank=True)
+    severity = models.CharField(max_length=30, blank=True)
+    identification_method = models.CharField(max_length=150, blank=True)
+    prevention_corrective_action = models.TextField(blank=True)
+    reference_photo = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Optional photo filename or reference URL.",
+    )
+    remarks = models.TextField(blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        abstract = False
+        ordering = ["defect_code"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("article", "factory", "defect_code"),
+                name="unique_article_factory_defect_code",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.article.article_code} - {self.defect_code}: {self.defect_name}"
+
+
 class HourlyLineSummary(TimeStampedModel):
     class Meta:
         ordering = ["-summary_date", "production_line__line_name", "check_hour"]
@@ -118,7 +158,19 @@ class HourlyLineSummary(TimeStampedModel):
 
         if manpower_entry and manpower_entry.shift:
             manpower = manpower_entry.manpower
-            working_minutes = manpower_entry.working_minutes or manpower_entry.shift.shift_minutes or 60
+            scheduled_minutes = manpower_entry.shift.scheduled_hour_working_minutes(
+                hourly_check.check_hour
+            )
+            if scheduled_minutes is not None:
+                working_minutes = scheduled_minutes
+            elif manpower_entry.shift.hourly_schedule:
+                working_minutes = 60
+            else:
+                working_minutes = (
+                    manpower_entry.working_minutes
+                    or manpower_entry.shift.shift_minutes
+                    or 60
+                )
         else:
             manpower = 0
             working_minutes = 60
@@ -181,6 +233,13 @@ class HourlyLineCheck(TimeStampedModel):
     production_line = models.ForeignKey(ProductionLine, on_delete=models.PROTECT, related_name="hourly_line_checks")
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.PROTECT, related_name="hourly_line_checks")
     article = models.ForeignKey(Article, on_delete=models.PROTECT, related_name="hourly_line_checks")
+    size = models.ForeignKey(
+        Size,
+        on_delete=models.PROTECT,
+        related_name="hourly_line_checks",
+        null=True,
+        blank=True,
+    )
     check_date = models.DateField()
     check_hour = models.PositiveIntegerField(default=9, help_text="Hour of the shift check, for example 9, 10, 11.")
     shift_name = models.CharField(max_length=100, blank=True)
@@ -267,6 +326,13 @@ class QualityInspection(TimeStampedModel):
     production_line = models.ForeignKey(ProductionLine, on_delete=models.PROTECT, related_name="quality_inspections")
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.PROTECT, related_name="quality_inspections")
     article = models.ForeignKey(Article, on_delete=models.PROTECT, related_name="quality_inspections")
+    size = models.ForeignKey(
+        Size,
+        on_delete=models.PROTECT,
+        related_name="quality_inspections",
+        null=True,
+        blank=True,
+    )
     buyer = models.CharField(max_length=150, blank=True, default="")
     inspection_type = models.CharField(max_length=20, choices=InspectionType.choices, default=InspectionType.END_LINE)
     shift = models.CharField(max_length=40, blank=True)

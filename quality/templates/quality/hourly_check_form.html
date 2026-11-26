@@ -25,6 +25,15 @@
           {% endfor %}
         </select>
       </div>
+      <div class="col-md-3">
+        <label class="form-label">Size</label>
+        <select name="size" class="form-select" required>
+          <option value="">Select size</option>
+          {% for size in sizes %}
+          <option value="{{ size.id }}">{{ size.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
       <div class="col-md-2">
         <label class="form-label">Inspected Qty</label>
         <input type="number" name="inspected_quantity" min="0" value="0" class="form-control" required>

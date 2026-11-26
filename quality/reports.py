@@ -10,7 +10,9 @@ from .models import InspectionDefect, QualityInspection
 
 def get_quality_summary_dataframe(inspections):
     rows = []
-    for inspection in inspections.select_related("production_line", "production_order", "article", "factory"):
+    for inspection in inspections.select_related(
+        "production_line", "production_order", "article", "factory", "size"
+    ):
         rows.append({
             "Inspection Number": inspection.inspection_number,
             "Date": inspection.inspection_date,
@@ -18,6 +20,7 @@ def get_quality_summary_dataframe(inspections):
             "Line": inspection.production_line.line_name,
             "Order": inspection.production_order.order_number,
             "Article": inspection.article.article_code,
+            "Size": inspection.size.name if inspection.size_id else "",
             "Buyer": inspection.buyer,
             "Inspection Type": inspection.inspection_type,
             "Inspected Qty": inspection.inspected_quantity,
@@ -48,9 +51,12 @@ def build_quality_excel_response(inspections, filename_prefix="quality_report"):
 
 def quality_defect_summary_query(inspections):
     defect_rows = []
-    for defect in InspectionDefect.objects.filter(inspection__in=inspections).select_related("inspection", "defect"):
+    for defect in InspectionDefect.objects.filter(inspection__in=inspections).select_related(
+        "inspection__size", "inspection", "defect"
+    ):
         defect_rows.append({
             "Inspection Number": defect.inspection.inspection_number,
+            "Size": defect.inspection.size.name if defect.inspection.size_id else "",
             "Defect Code": defect.defect.defect_code,
             "Defect Name": defect.defect.defect_name,
             "Category": defect.defect.category,

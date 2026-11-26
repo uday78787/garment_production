@@ -47,22 +47,23 @@
   <div class="card shadow-sm">
     <div class="table-responsive">
       <table class="table table-striped table-hover align-middle mb-0">
-        <thead><tr><th>Unique Code</th><th>Article</th><th>Date</th><th>Time</th><th>Defect Type</th><th>Hour</th><th>Line</th><th>User ID</th><th>Qty</th><th>Status</th></tr></thead>
+        <thead><tr><th>Unique Code</th><th>Article</th><th>Size</th><th>Date</th><th>Time</th><th>Defect Type</th><th>Hour</th><th>Line</th><th>User ID</th><th>Qty</th><th>Status</th></tr></thead>
         <tbody>
           {% for record in defect_records %}
           <tr>
             <td><code>{{ record.tracking_code }}</code></td>
             <td>{{ record.hourly_check.article.article_code }}</td>
+            <td>{{ record.hourly_check.size|default:'-' }}</td>
             <td>{{ record.hourly_check.check_date }}</td>
             <td>{{ record.marked_at|date:'H:i:s' }}</td>
             <td>{{ record.defect.defect_code }} - {{ record.defect.defect_name }}</td>
-            <td>{{ record.hourly_check.check_hour }}</td>
+            <td>{{ record.hourly_check.hour_label }}</td>
             <td>{{ record.hourly_check.production_line.line_name }}</td>
             <td>{{ record.created_by.username|default:'-' }}</td>
             <td>{{ record.defect_quantity }}</td>
             <td>{% if record.resolved %}<span class="badge text-bg-success">Resolved</span>{% else %}<span class="badge text-bg-warning">Pending</span>{% endif %}</td>
           </tr>
-          {% empty %}<tr><td colspan="10" class="text-center text-muted py-4">No defects match the selected filters.</td></tr>{% endfor %}
+          {% empty %}<tr><td colspan="11" class="text-center text-muted py-4">No defects match the selected filters.</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>

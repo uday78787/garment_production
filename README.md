@@ -19,8 +19,8 @@ production entry, and Excel/PDF reporting.
 |---|---|
 | `accounts` | Login/logout/password reset, `UserProfile`, role↔Group sync, access-control mixins |
 | `master_data` | `ProductionLine`, `Article` (style + SAM), `Holiday` |
-| `planning` | `ProductionOrder`, `LineAssignment`, and `planning/services/calculations.py` |
-| `production` | `DailyProductionEntry` (daily entry form/list, derived-field calculation) |
+| `planning` | `ProductionOrder`, `LineAssignment`, factory sections, order process steps, and `planning/services/calculations.py` |
+| `production` | Daily production entries and factory process batch/QC workflows |
 | `dashboard` | Admin dashboard (factory-wide) and User dashboard (assigned lines only) |
 | `reports` | Filterable report page + Excel/PDF export |
 | `common` | `AuditLog`, shared base model, shared utilities |
@@ -106,10 +106,34 @@ Then:
 1. Log in to `/admin/` as your superuser.
 2. Set that user's `UserProfile.role` to `Admin` (or use the admin panel's
    User Profiles section) — new users default to `Production User`.
-3. Create `ProductionLine`, `Article`, `ProductionOrder`, and
-   `LineAssignment` records (via `/admin/`).
+3. Add available options under **Sizes** in Master Data before selecting them
+   for Articles and quality checks. Maintain article/style details, toggle **Enable quality checklist** for
+   articles that use the factory's manually configured checklist, and upload
+   the article image plus measurement/operation bulletins under **Articles**.
+   Record PO number, client, merchant, priority, order quantity, and order
+   dates under **Production Orders**. Assign the production line (and therefore
+   its factory) plus operation dates under **Line Assignments**.
 4. Create Production User accounts and assign them to specific
    `ProductionLine`s via their `UserProfile.assigned_lines`.
+
+### Factory process flows
+
+Superusers and Factory Admins configure factory-specific departments in
+**Admin → Section Management**, including quality criteria; sections have no
+global sequence. A Factory Admin can only manage sections for their assigned
+factory. Superusers alone configure the **EAV Field Settings** for each
+section; those custom fields are captured on each process batch.
+
+Configure ordered operations for each Article and factory in **Admin → Article
+Process Flows**. Each operation is assigned to a factory section. The
+Operation Bulletin remains an Article attachment; its details can be entered
+in the separate Article Process Flow setup. Assigning a Production Order from
+**Order Process Flow → Assign Flow to Order** copies that Article/factory flow
+to the order. Factory workers with Supervisor or QA roles can record section
+batches and quality checks for their factory. Each operation can process only
+quantity passed by the previous operation; QC releases only inspected pieces,
+and failed pieces are scrapped. Partial batches and repeated quality checks
+are supported.
 
 ## Running tests
 

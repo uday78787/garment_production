@@ -6,6 +6,14 @@ from .models import AuditLog
 class FactoryScopedAdminMixin:
     """Keep operational admin records within the user's factory or lines."""
 
+    _factory_scoped_bulletins = {"ArticleMeasurementPoint", "ArticleDefectBulletin"}
+
+    def has_module_permission(self, request):
+        if self.model.__name__ in self._factory_scoped_bulletins:
+            profile = getattr(request.user, "profile", None)
+            return request.user.is_superuser or bool(profile and profile.is_admin)
+        return super().has_module_permission(request)
+
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
         if request.user.is_superuser:
@@ -18,6 +26,11 @@ class FactoryScopedAdminMixin:
             model_name = self.model.__name__
             if model_name == "Factory":
                 return queryset.filter(pk__in=factories.values("pk"))
+            if model_name in {"ArticleMeasurementPoint", "ArticleDefectBulletin"}:
+                factory_ids = list(factories.values_list("pk", flat=True))
+                if profile.factory_id:
+                    factory_ids.append(profile.factory_id)
+                return queryset.filter(factory_id__in=factory_ids).distinct()
             if model_name == "ProductionLine":
                 return queryset.filter(factory__in=factories)
             if model_name == "ProductionOrder":
@@ -51,6 +64,11 @@ class FactoryScopedAdminMixin:
             model_name = self.model.__name__
             if model_name == "Factory":
                 return obj.pk in profile.accessible_factories.values_list("pk", flat=True)
+            if model_name in {"ArticleMeasurementPoint", "ArticleDefectBulletin"}:
+                factory_ids = list(profile.accessible_factories.values_list("pk", flat=True))
+                if profile.factory_id:
+                    factory_ids.append(profile.factory_id)
+                return obj.factory_id in factory_ids
             if model_name == "ProductionLine":
                 return obj.factory_id in profile.accessible_factories.values_list("pk", flat=True)
             if model_name == "ProductionOrder":
@@ -62,11 +80,25 @@ class FactoryScopedAdminMixin:
         return False
 
     def has_change_permission(self, request, obj=None):
+        if self.model.__name__ in self._factory_scoped_bulletins:
+            if obj is None:
+                profile = getattr(request.user, "profile", None)
+                return request.user.is_superuser or bool(profile and profile.is_admin)
+            return self.has_view_permission(request, obj) and self.get_queryset(
+                request
+            ).filter(pk=obj.pk).exists()
         if obj is None:
             return super().has_change_permission(request, obj)
         return super().has_change_permission(request, obj) and self.get_queryset(request).filter(pk=obj.pk).exists()
 
     def has_delete_permission(self, request, obj=None):
+        if self.model.__name__ in self._factory_scoped_bulletins:
+            if obj is None:
+                profile = getattr(request.user, "profile", None)
+                return request.user.is_superuser or bool(profile and profile.is_admin)
+            return self.has_view_permission(request, obj) and self.get_queryset(
+                request
+            ).filter(pk=obj.pk).exists()
         if obj is None:
             return super().has_delete_permission(request, obj)
         return super().has_delete_permission(request, obj) and self.get_queryset(request).filter(pk=obj.pk).exists()

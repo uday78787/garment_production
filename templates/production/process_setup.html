@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Assign Order Process Flow{% endblock %}
+{% block content %}
+<h3><i class="fa-solid fa-diagram-project"></i> Assign Process Flow to Order</h3>
+<p class="text-muted">Select a factory and Production Order. The assigned Article's operation flow for that factory will be copied to this order.</p>
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+            {% if form.non_field_errors %}
+            <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+            {% endif %}
+            {% for field in form %}
+            <div class="mb-3">
+                <label class="form-label fw-semibold">{{ field.label }}</label>
+                {{ field }}
+                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
+            </div>
+            {% endfor %}
+            <button type="submit" class="btn btn-primary">Assign Flow</button>
+            <a href="{% url 'production:process_list' %}" class="btn btn-outline-secondary">Cancel</a>
+        </form>
+    </div>
+</div>
+{% endblock %}
