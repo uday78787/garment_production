@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from common.admin import FactoryScopedAdminMixin
-from master_data.models import Factory
+from master_data.models import Article, Factory
 from .models import (
     ArticleDefectBulletin,
     DefectMaster,
@@ -34,23 +34,36 @@ class ArticleDefectBulletinAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
     )
     list_select_related = ("article", "factory")
 
+    def get_list_filter(self, request):
+        fields = list(super().get_list_filter(request))
+        if not request.user.is_superuser:
+            fields.remove("factory")
+        return fields
+
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
         for field in ("article", "factory"):
             if request.GET.get(field):
                 initial[field] = request.GET[field]
+        profile = getattr(request.user, "profile", None)
+        if profile and profile.is_admin and profile.factory_id:
+            initial["factory"] = profile.factory_id
         return initial
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "factory" and not request.user.is_superuser:
+        if db_field.name in {"article", "factory"} and not request.user.is_superuser:
             profile = getattr(request.user, "profile", None)
             if profile and profile.is_admin:
-                factory_ids = list(profile.accessible_factories.values_list("pk", flat=True))
-                if profile.factory_id:
-                    factory_ids.append(profile.factory_id)
-                kwargs["queryset"] = Factory.objects.filter(pk__in=factory_ids).distinct()
+                if db_field.name == "factory" and profile.factory_id:
+                    kwargs["queryset"] = Factory.objects.filter(pk=profile.factory_id)
+                elif db_field.name == "article" and profile.factory_id:
+                    kwargs["queryset"] = Article.objects.filter(
+                        factory_id=profile.factory_id
+                    )
+                else:
+                    kwargs["queryset"] = db_field.remote_field.model.objects.none()
             else:
-                kwargs["queryset"] = Factory.objects.none()
+                kwargs["queryset"] = db_field.remote_field.model.objects.none()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 

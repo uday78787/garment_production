@@ -108,8 +108,11 @@ Then:
    User Profiles section) — new users default to `Production User`.
 3. Add available options under **Sizes** in Master Data before selecting them
    for Articles and quality checks. Maintain article/style details, toggle **Enable quality checklist** for
-   articles that use the factory's manually configured checklist, and upload
+   articles that use the factory's manually configured checklist, assign each
+   Article to its factory, and upload
    the article image plus measurement/operation bulletins under **Articles**.
+   Factory Admins can only view and manage Articles assigned to their own
+   factory. Existing Articles remain unassigned until a superuser assigns them.
    Record PO number, client, merchant, priority, order quantity, and order
    dates under **Production Orders**. Assign the production line (and therefore
    its factory) plus operation dates under **Line Assignments**.
@@ -125,9 +128,10 @@ factory. Superusers alone configure the **EAV Field Settings** for each
 section; those custom fields are captured on each process batch.
 
 Configure ordered operations for each Article and factory in **Admin → Article
-Process Flows**. Each operation is assigned to a factory section. The
-Operation Bulletin remains an Article attachment; its details can be entered
-in the separate Article Process Flow setup. Assigning a Production Order from
+Process Flows** or through **Article → Bulletin Settings** manually or by CSV.
+Each operation is assigned to a factory section and can have its own SAM in
+minutes; **Next Operation** is derived from Sequence and included in CSV
+exports. Assigning a Production Order from
 **Order Process Flow → Assign Flow to Order** copies that Article/factory flow
 to the order. Factory workers with Supervisor or QA roles can record section
 batches and quality checks for their factory. Each operation can process only

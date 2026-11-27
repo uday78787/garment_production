@@ -1,2 +1,3 @@
-Article Code,Article Name,PO No.,Sequence,Department/Section,Operation,Operation Description,Machine/Equipment,Attachment/Foot,Standard Time (Minutes),Quality Checkpoint,Skill Level,Remarks
-ART-100,Sample T-Shirt,PO-100,1,Stitching,Join shoulder seams,Sew front and back shoulder seams,Single needle lockstitch,Standard presser foot,0.45,Seam strength,Skilled,
+Article Code,Article Name,PO No.,Sequence,Department/Section,Operation,Next Operation,Operation Description,Machine/Equipment,Attachment/Foot,SAM (Minutes),Quality Checkpoint,Skill Level,Remarks
+ART-100,Sample T-Shirt,PO-100,1,Stitching,Join shoulder seams,Topstitch collar,Sew front and back shoulder seams,Single needle lockstitch,Standard presser foot,0.45,Seam strength,Skilled,
+ART-100,Sample T-Shirt,PO-100,2,Stitching,Topstitch collar,,Topstitch the collar to the neckline,Single needle lockstitch,Standard presser foot,0.30,Check collar alignment,Skilled,

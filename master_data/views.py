@@ -2,7 +2,7 @@ from pathlib import PurePosixPath
 
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import Q
-from django.http import FileResponse
+from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_GET
 
@@ -23,6 +23,11 @@ def article_file(request, file_path):
     for field_name in ARTICLE_FILE_FIELDS:
         file_filter |= Q(**{field_name: file_path})
     article = get_object_or_404(Article.objects.filter(file_filter))
+    profile = getattr(request.user, "profile", None)
+    if profile and profile.is_admin and (
+        not profile.factory_id or article.factory_id != profile.factory_id
+    ):
+        raise Http404
     article_file_field = next(
         getattr(article, field_name)
         for field_name in ARTICLE_FILE_FIELDS

@@ -3,6 +3,7 @@ from django.core.exceptions import ValidationError
 from django.forms.models import BaseInlineFormSet
 
 from common.admin import FactoryScopedAdminMixin
+from master_data.models import Article, Factory
 from .forms import LineAssignmentAdminForm
 from .models import (
     ArticleProcessFlow,
@@ -39,6 +40,15 @@ class ProductionOrderAdmin(FactoryScopedAdminMixin, admin.ModelAdmin):
             ),
         }),
     )
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "article" and not request.user.is_superuser:
+            profile = getattr(request.user, "profile", None)
+            if profile and profile.is_admin and profile.factory_id:
+                kwargs["queryset"] = Article.objects.filter(factory_id=profile.factory_id)
+            else:
+                kwargs["queryset"] = Article.objects.none()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
 @admin.register(LineAssignment)
@@ -90,30 +100,24 @@ class FactorySectionAdmin(admin.ModelAdmin):
 
     def _is_manager(self, request):
         profile = getattr(request.user, "profile", None)
-        return request.user.is_superuser or bool(profile and profile.is_admin)
+        return request.user.is_superuser or bool(
+            profile and profile.is_admin and profile.factory_id
+        )
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request).select_related("factory")
         if request.user.is_superuser:
             return queryset
         profile = getattr(request.user, "profile", None)
-        if profile and profile.is_admin:
-            factory_ids = profile.accessible_factories.values_list("pk", flat=True)
-            if profile.factory_id:
-                factory_ids = list(factory_ids) + [profile.factory_id]
-            return queryset.filter(factory_id__in=factory_ids).distinct()
+        if profile and profile.is_admin and profile.factory_id:
+            return queryset.filter(factory_id=profile.factory_id)
         return queryset.none()
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "factory" and not request.user.is_superuser:
             profile = getattr(request.user, "profile", None)
-            if profile and profile.is_admin:
-                factory_ids = profile.accessible_factories.values_list("pk", flat=True)
-                if profile.factory_id:
-                    factory_ids = list(factory_ids) + [profile.factory_id]
-                kwargs["queryset"] = db_field.remote_field.model.objects.filter(
-                    pk__in=factory_ids
-                ).distinct()
+            if profile and profile.is_admin and profile.factory_id:
+                kwargs["queryset"] = Factory.objects.filter(pk=profile.factory_id)
             else:
                 kwargs["queryset"] = db_field.remote_field.model.objects.none()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
@@ -130,6 +134,12 @@ class FactorySectionAdmin(admin.ModelAdmin):
         if obj is None or obj.pk is None or request.user.is_superuser:
             return True
         return self.get_queryset(request).filter(pk=obj.pk).exists()
+
+    def get_list_filter(self, request):
+        fields = list(super().get_list_filter(request))
+        if not request.user.is_superuser:
+            fields.remove("factory")
+        return fields
 
     def has_change_permission(self, request, obj=None):
         if not self._is_manager(request):
@@ -201,6 +211,7 @@ class ArticleProcessStepInline(admin.TabularInline):
         "sequence",
         "section",
         "operation_name",
+        "next_operation",
         "operation_description",
         "machine_equipment",
         "attachment_foot",
@@ -209,10 +220,17 @@ class ArticleProcessStepInline(admin.TabularInline):
         "skill_level",
         "remarks",
     )
+    readonly_fields = ("next_operation",)
+
+    @admin.display(description="Next Operation")
+    def next_operation(self, obj):
+        return obj.next_operation if obj else ""
 
     def _is_manager(self, request):
         profile = getattr(request.user, "profile", None)
-        return request.user.is_superuser or bool(profile and profile.is_admin)
+        return request.user.is_superuser or bool(
+            profile and profile.is_admin and profile.factory_id
+        )
 
     def get_queryset(self, request):
         return super().get_queryset(request).order_by("sequence")
@@ -223,14 +241,11 @@ class ArticleProcessStepInline(admin.TabularInline):
                 kwargs["queryset"] = FactorySection.objects.filter(active=True)
             else:
                 profile = getattr(request.user, "profile", None)
-                if profile and profile.is_admin:
-                    factory_ids = profile.accessible_factories.values_list("pk", flat=True)
-                    if profile.factory_id:
-                        factory_ids = list(factory_ids) + [profile.factory_id]
+                if profile and profile.is_admin and profile.factory_id:
                     kwargs["queryset"] = FactorySection.objects.filter(
-                        factory_id__in=factory_ids,
+                        factory_id=profile.factory_id,
                         active=True,
-                    ).distinct()
+                    )
                 else:
                     kwargs["queryset"] = FactorySection.objects.none()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
@@ -264,36 +279,43 @@ class ArticleProcessFlowAdmin(admin.ModelAdmin):
 
     def _is_manager(self, request):
         profile = getattr(request.user, "profile", None)
-        return request.user.is_superuser or bool(profile and profile.is_admin)
+        return request.user.is_superuser or bool(
+            profile and profile.is_admin and profile.factory_id
+        )
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request).select_related("article", "factory")
         if request.user.is_superuser:
             return queryset
         profile = getattr(request.user, "profile", None)
-        if profile and profile.is_admin:
-            factory_ids = profile.accessible_factories.values_list("pk", flat=True)
-            if profile.factory_id:
-                factory_ids = list(factory_ids) + [profile.factory_id]
-            return queryset.filter(factory_id__in=factory_ids).distinct()
+        if profile and profile.is_admin and profile.factory_id:
+            return queryset.filter(factory_id=profile.factory_id)
         return queryset.none()
 
+    def get_list_filter(self, request):
+        fields = list(super().get_list_filter(request))
+        if not request.user.is_superuser:
+            fields.remove("factory")
+        return fields
+
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "factory" and not request.user.is_superuser:
+        if db_field.name in {"article", "factory"} and not request.user.is_superuser:
             profile = getattr(request.user, "profile", None)
-            if profile and profile.is_admin:
-                factory_ids = profile.accessible_factories.values_list("pk", flat=True)
-                if profile.factory_id:
-                    factory_ids = list(factory_ids) + [profile.factory_id]
-                kwargs["queryset"] = db_field.remote_field.model.objects.filter(
-                    pk__in=factory_ids
-                ).distinct()
+            if profile and profile.is_admin and profile.factory_id:
+                if db_field.name == "factory":
+                    kwargs["queryset"] = Factory.objects.filter(pk=profile.factory_id)
+                else:
+                    kwargs["queryset"] = Article.objects.filter(factory_id=profile.factory_id)
             else:
                 kwargs["queryset"] = db_field.remote_field.model.objects.none()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
+        profile = getattr(request.user, "profile", None)
+        if profile and profile.is_admin and profile.factory_id:
+            initial["factory"] = profile.factory_id
+            return initial
         for field in ("article", "factory"):
             if request.GET.get(field):
                 initial[field] = request.GET[field]

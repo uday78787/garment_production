@@ -8,10 +8,15 @@ class FactoryScopedAdminMixin:
 
     _factory_scoped_bulletins = {"ArticleMeasurementPoint", "ArticleDefectBulletin"}
 
+    def _can_manage_article_bulletins(self, request):
+        profile = getattr(request.user, "profile", None)
+        return request.user.is_superuser or bool(
+            profile and profile.is_admin and profile.factory_id
+        )
+
     def has_module_permission(self, request):
         if self.model.__name__ in self._factory_scoped_bulletins:
-            profile = getattr(request.user, "profile", None)
-            return request.user.is_superuser or bool(profile and profile.is_admin)
+            return self._can_manage_article_bulletins(request)
         return super().has_module_permission(request)
 
     def get_queryset(self, request):
@@ -27,10 +32,9 @@ class FactoryScopedAdminMixin:
             if model_name == "Factory":
                 return queryset.filter(pk__in=factories.values("pk"))
             if model_name in {"ArticleMeasurementPoint", "ArticleDefectBulletin"}:
-                factory_ids = list(factories.values_list("pk", flat=True))
                 if profile.factory_id:
-                    factory_ids.append(profile.factory_id)
-                return queryset.filter(factory_id__in=factory_ids).distinct()
+                    return queryset.filter(factory_id=profile.factory_id)
+                return queryset.none()
             if model_name == "ProductionLine":
                 return queryset.filter(factory__in=factories)
             if model_name == "ProductionOrder":
@@ -50,6 +54,8 @@ class FactoryScopedAdminMixin:
         if profile is None or not profile.is_admin:
             return False
         model_name = self.model.__name__
+        if model_name in self._factory_scoped_bulletins:
+            return bool(profile.factory_id)
         return model_name != "Factory"
 
     def has_view_permission(self, request, obj=None):
@@ -59,16 +65,15 @@ class FactoryScopedAdminMixin:
         if profile is None:
             return False
         if obj is None:
+            if self.model.__name__ in self._factory_scoped_bulletins:
+                return bool(profile.is_admin and profile.factory_id)
             return bool(profile.is_admin)
         if profile.is_admin:
             model_name = self.model.__name__
             if model_name == "Factory":
                 return obj.pk in profile.accessible_factories.values_list("pk", flat=True)
             if model_name in {"ArticleMeasurementPoint", "ArticleDefectBulletin"}:
-                factory_ids = list(profile.accessible_factories.values_list("pk", flat=True))
-                if profile.factory_id:
-                    factory_ids.append(profile.factory_id)
-                return obj.factory_id in factory_ids
+                return bool(profile.factory_id and obj.factory_id == profile.factory_id)
             if model_name == "ProductionLine":
                 return obj.factory_id in profile.accessible_factories.values_list("pk", flat=True)
             if model_name == "ProductionOrder":
@@ -82,8 +87,7 @@ class FactoryScopedAdminMixin:
     def has_change_permission(self, request, obj=None):
         if self.model.__name__ in self._factory_scoped_bulletins:
             if obj is None:
-                profile = getattr(request.user, "profile", None)
-                return request.user.is_superuser or bool(profile and profile.is_admin)
+                return self._can_manage_article_bulletins(request)
             return self.has_view_permission(request, obj) and self.get_queryset(
                 request
             ).filter(pk=obj.pk).exists()
@@ -94,8 +98,7 @@ class FactoryScopedAdminMixin:
     def has_delete_permission(self, request, obj=None):
         if self.model.__name__ in self._factory_scoped_bulletins:
             if obj is None:
-                profile = getattr(request.user, "profile", None)
-                return request.user.is_superuser or bool(profile and profile.is_admin)
+                return self._can_manage_article_bulletins(request)
             return self.has_view_permission(request, obj) and self.get_queryset(
                 request
             ).filter(pk=obj.pk).exists()

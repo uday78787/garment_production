@@ -339,6 +339,8 @@ class ArticleProcessStep(TimeStampedModel):
         null=True,
         blank=True,
         validators=[MinValueValidator(0)],
+        verbose_name="SAM",
+        help_text="Operation-specific standard allotted minutes; it need not total the Article SAM.",
     )
     quality_checkpoint = models.TextField(blank=True)
     skill_level = models.CharField(max_length=80, blank=True)
@@ -358,6 +360,18 @@ class ArticleProcessStep(TimeStampedModel):
         if self.flow_id and self.section_id:
             if self.flow.factory_id != self.section.factory_id:
                 raise ValidationError({"section": "Select a section belonging to this flow's factory."})
+
+    @property
+    def next_operation(self):
+        if not self.flow_id or not self.pk:
+            return ""
+        return (
+            self.flow.steps.filter(sequence__gt=self.sequence)
+            .order_by("sequence")
+            .values_list("operation_name", flat=True)
+            .first()
+            or ""
+        )
 
     def __str__(self):
         return f"{self.flow} - {self.sequence}. {self.operation_name}"

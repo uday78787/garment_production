@@ -24,12 +24,14 @@ class ArticleAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["factory"].required = True
         self.fields["size"].queryset = Size.objects.order_by("name")
         for field_name, (label, sample_path) in ARTICLE_BULLETIN_SAMPLES.items():
             field = self.fields[field_name]
             field.help_text = format_html(
-                "{} Structured bulletin rows, manual editing, and CSV import/export are "
-                "available from Article Bulletin Settings. Sample format: "
+                "{} This optional document is only an attachment; it does not populate "
+                "structured bulletin rows. Use Article Bulletin Settings for manual setup "
+                "or CSV import/export. Sample format: "
                 "<a href=\"{}\" download>Download {} CSV</a>.",
                 field.help_text,
                 static(sample_path),

@@ -32,10 +32,11 @@ EXPORT_FIELDS = {
         "Sequence",
         "Department/Section",
         "Operation",
+        "Next Operation",
         "Operation Description",
         "Machine/Equipment",
         "Attachment/Foot",
-        "Standard Time (Minutes)",
+        "SAM (Minutes)",
         "Quality Checkpoint",
         "Skill Level",
         "Remarks",
@@ -266,6 +267,7 @@ def _import_operations(upload, article, factory, user):
         sections[key] = section
     entries = []
     seen_sequences = set()
+    provided_next_operations = {}
     for row_number, row in rows:
         _validate_article(row, article, row_number)
         sequence_value = _value(row, "Sequence")
@@ -304,6 +306,10 @@ def _import_operations(upload, article, factory, user):
         )
         if not operation_name:
             raise BulletinImportError(f"Row {row_number}: Operation is required.")
+        provided_next_operations[sequence] = (
+            row_number,
+            _value(row, "Next Operation"),
+        )
         machine_equipment = _text(
             _value(row, "Machine/Equipment"),
             "Machine/Equipment",
@@ -333,8 +339,14 @@ def _import_operations(upload, article, factory, user):
                 "machine_equipment": machine_equipment,
                 "attachment_foot": attachment_foot,
                 "standard_time_minutes": _decimal(
-                    _value(row, "Standard Time (Minutes)", "Standard Time"),
-                    "Standard Time (Minutes)",
+                    _value(
+                        row,
+                        "SAM (Minutes)",
+                        "SAM",
+                        "Standard Time (Minutes)",
+                        "Standard Time",
+                    ),
+                    "SAM (Minutes)",
                     row_number,
                     non_negative=True,
                     max_digits=8,
@@ -345,6 +357,22 @@ def _import_operations(upload, article, factory, user):
                 "remarks": _value(row, "Remarks"),
             }
         )
+
+    ordered_entries = sorted(entries, key=lambda entry: entry["sequence"])
+    for index, entry in enumerate(ordered_entries):
+        row_number, provided_next = provided_next_operations[entry["sequence"]]
+        if not provided_next:
+            continue
+        expected_next = (
+            ordered_entries[index + 1]["operation_name"]
+            if index + 1 < len(ordered_entries)
+            else ""
+        )
+        if provided_next.casefold() != expected_next.casefold():
+            expected = f"'{expected_next}'" if expected_next else "blank for the final operation"
+            raise BulletinImportError(
+                f"Row {row_number}: Next Operation must be {expected} based on Sequence."
+            )
 
     with transaction.atomic():
         flow, _ = ArticleProcessFlow.objects.get_or_create(
@@ -466,7 +494,8 @@ def export_article_bulletin(bulletin_type, article, factory):
             flow__article=article,
             flow__factory=factory,
         ).select_related("section").order_by("sequence")
-        for entry in records:
+        records = list(records)
+        for index, entry in enumerate(records):
             writer.writerow(
                 {
                     "Sequence": entry.sequence,
@@ -475,10 +504,15 @@ def export_article_bulletin(bulletin_type, article, factory):
                     "PO No.": "",
                     "Department/Section": entry.section.name,
                     "Operation": entry.operation_name,
+                    "Next Operation": (
+                        records[index + 1].operation_name
+                        if index + 1 < len(records)
+                        else ""
+                    ),
                     "Operation Description": entry.operation_description,
                     "Machine/Equipment": entry.machine_equipment,
                     "Attachment/Foot": entry.attachment_foot,
-                    "Standard Time (Minutes)": (
+                    "SAM (Minutes)": (
                         entry.standard_time_minutes
                         if entry.standard_time_minutes is not None
                         else ""

@@ -449,6 +449,13 @@ class Size(TimeStampedModel):
 class Article(TimeStampedModel):
     """A style/article the factory produces. Also referred to as 'Style'."""
 
+    factory = models.ForeignKey(
+        Factory,
+        on_delete=models.PROTECT,
+        related_name="articles",
+        null=True,
+        blank=True,
+    )
     article_code = models.CharField(max_length=50, unique=True)
     article_name = models.CharField(max_length=200)
     sam = models.DecimalField(

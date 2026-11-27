@@ -37,6 +37,7 @@ class FactoryProcessWorkflowTests(TestCase):
         )
         self.factory = Factory.objects.create(name="Workflow Factory", code="WF")
         self.article = Article.objects.create(
+            factory=self.factory,
             article_code="ART-FLOW",
             article_name="Workflow Article",
             sam=Decimal("12.5"),
@@ -159,6 +160,7 @@ class FactoryProcessWorkflowTests(TestCase):
             required=True,
         )
         eav_article = Article.objects.create(
+            factory=self.factory,
             article_code="ART-EAV",
             article_name="EAV Article",
             sam=Decimal("10"),
@@ -264,6 +266,22 @@ class FactoryProcessWorkflowTests(TestCase):
         flow_admin = ArticleProcessFlowAdmin(ArticleProcessFlow, admin.site)
         self.assertTrue(flow_admin.has_module_permission(request))
         self.assertTrue(flow_admin.get_queryset(request).filter(pk=self.article_flow.pk).exists())
+        other_factory = Factory.objects.create(name="Scoped Flow Factory", code="SCOPED")
+        other_article = Article.objects.create(
+            factory=other_factory,
+            article_code="ART-SCOPED",
+            article_name="Scoped Article",
+            sam=Decimal("10"),
+        )
+        profile.accessible_factories.add(other_factory)
+        flow_form = flow_admin.get_form(request)()
+        self.assertIn(self.article, flow_form.fields["article"].queryset)
+        self.assertNotIn(other_article, flow_form.fields["article"].queryset)
+        self.assertQuerySetEqual(
+            flow_form.fields["factory"].queryset,
+            [self.factory],
+            transform=lambda factory: factory,
+        )
         self.assertFalse(field_admin.has_module_permission(request))
         self.assertFalse(field_admin.has_add_permission(request))
 
@@ -277,6 +295,8 @@ class FactoryProcessWorkflowTests(TestCase):
         flow_response = self.client.get(reverse("admin:planning_articleprocessflow_add"))
         self.assertEqual(flow_response.status_code, 200)
         self.assertContains(flow_response, "Sequence")
+        self.assertContains(flow_response, "SAM")
+        self.assertContains(flow_response, "Next Operation")
         flow_prefix = flow_response.context["inline_admin_formsets"][0].formset.prefix
         inline_data = {
             f"{flow_prefix}-TOTAL_FORMS": "1",
@@ -296,6 +316,7 @@ class FactoryProcessWorkflowTests(TestCase):
             f"{flow_prefix}-0-remarks": "",
         }
         new_article = Article.objects.create(
+            factory=self.factory,
             article_code="ART-ADMIN-FLOW",
             article_name="Admin Flow Article",
             sam=Decimal("10"),
@@ -338,9 +359,15 @@ class FactoryProcessWorkflowTests(TestCase):
 
     def test_factory_admin_cannot_access_another_factory_process(self):
         other_factory = Factory.objects.create(name="Other Workflow Factory", code="OWF")
+        other_article = Article.objects.create(
+            factory=other_factory,
+            article_code="ART-OTHER-FLOW",
+            article_name="Other Factory Article",
+            sam=Decimal("10"),
+        )
         other_order = ProductionOrder.objects.create(
             order_number="PO-OTHER",
-            article=self.article,
+            article=other_article,
             order_quantity=100,
             customer_name="Other Client",
             delivery_date=date(2026, 12, 31),
@@ -351,7 +378,7 @@ class FactoryProcessWorkflowTests(TestCase):
             quality_criteria="Check packed quantity and labels.",
         )
         other_flow = ArticleProcessFlow.objects.create(
-            article=self.article,
+            article=other_article,
             factory=other_factory,
             created_by=self.superuser,
         )

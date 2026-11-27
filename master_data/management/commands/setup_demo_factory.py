@@ -158,6 +158,7 @@ class Command(BaseCommand):
             )
 
         article = Article.objects.create(
+            factory=factory,
             article_code="DEMO-TSHIRT-001",
             article_name="Demo Cotton T-Shirt",
             sam=Decimal("12.50"),
