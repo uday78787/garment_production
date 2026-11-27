@@ -66,16 +66,26 @@ class OrderProcessSetupForm(forms.Form):
 class ProcessBatchForm(forms.ModelForm):
     class Meta:
         model = ProcessBatch
-        fields = ["input_quantity", "output_quantity", "notes"]
+        fields = [
+            "input_quantity",
+            "output_quantity",
+            "actual_manpower",
+            "working_minutes",
+            "notes",
+        ]
         widgets = {
             "input_quantity": forms.NumberInput(attrs={"class": "form-control", "min": 1}),
             "output_quantity": forms.NumberInput(attrs={"class": "form-control", "min": 0}),
+            "actual_manpower": forms.NumberInput(attrs={"class": "form-control", "min": 1}),
+            "working_minutes": forms.NumberInput(attrs={"class": "form-control", "min": 1}),
             "notes": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
         }
 
     def __init__(self, *args, step, **kwargs):
         self.step = step
         super().__init__(*args, **kwargs)
+        self.fields["actual_manpower"].required = True
+        self.fields["working_minutes"].required = True
         available = step.available_input_quantity
         self.fields["input_quantity"].help_text = (
             f"Maximum available from the previous section: {available} pcs."

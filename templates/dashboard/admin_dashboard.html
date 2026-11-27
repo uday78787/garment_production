@@ -2,7 +2,11 @@
 {% block title %}Admin Dashboard{% endblock %}
 {% block content %}
 <h3><i class="fa-solid fa-gauge"></i> Admin Dashboard</h3>
+{% if selected_section %}
+<p class="text-muted">Operation dashboard for {{ selected_section.name }}. Operation output, rejected pieces, DHU and efficiency use the selected operation.</p>
+{% else %}
 <p class="text-muted">Factory-wide production overview (last 14 days).</p>
+{% endif %}
 
 <div class="row g-3 mb-4">
     <div class="col-md-4">
@@ -46,6 +50,9 @@
         <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#styleSelector">
             <i class="fa-solid fa-shirt"></i> Select Style
         </button>
+        <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#sectionOutputFilter">
+            <i class="fa-solid fa-filter"></i> Section Output Filter
+        </button>
     </div>
 </div>
 
@@ -54,7 +61,7 @@
         <div class="card text-bg-primary shadow-sm">
             <div class="card-body">
                 <div class="fs-4">{{ kpi_total_output|floatformat:0 }}</div>
-                <div>Total Inspected Output (pcs)</div>
+                <div>{% if selected_section %}Section Output (pcs){% else %}Total Inspected Output (pcs){% endif %}</div>
             </div>
         </div>
     </div>
@@ -62,7 +69,7 @@
         <div class="card text-bg-danger shadow-sm">
             <div class="card-body">
                 <div class="fs-4">{{ kpi_total_defects|floatformat:0 }}</div>
-                <div>Defect Pieces Found</div>
+                <div>{% if selected_section %}Defects (rejected pieces){% else %}Defect Pieces Found{% endif %}</div>
             </div>
         </div>
     </div>
@@ -77,13 +84,23 @@
     <div class="col-md-3">
         <div class="card text-bg-warning shadow-sm">
             <div class="card-body">
-                <div class="fs-4">{{ kpi_avg_efficiency }}%</div>
-                <div>Average Efficiency</div>
+                <div class="fs-4">
+                    {% if selected_section and not section_efficiency_available %}
+                    N/A
+                    {% else %}
+                    {{ kpi_avg_efficiency }}%
+                    {% endif %}
+                </div>
+                <div>{% if selected_section %}Operation Efficiency{% else %}Average Efficiency{% endif %}</div>
+                {% if selected_section and not section_efficiency_available %}
+                <small class="opacity-75">Requires operation SAM, manpower and minutes.</small>
+                {% endif %}
             </div>
         </div>
     </div>
 </div>
 
+{% if not selected_section %}
 <div class="card shadow-sm mb-4">
     <div class="card-body">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
@@ -193,8 +210,55 @@
         </div>
     </div>
 </div>
+{% endif %}
 
-{% if qa_defect_breakdown %}
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <div>
+                <h5 class="card-title mb-1"><i class="fa-solid fa-list-ol"></i> Section-wise Output (Fabric to Dispatch)</h5>
+                <small class="text-muted">Section batch quantities in process order. Efficiency = output × operation SAM ÷ available labor minutes; DHU uses rejected pieces ÷ inspected pieces.</small>
+            </div>
+            {% if selected_section %}
+            <span class="badge text-bg-primary">{{ selected_section.name }}</span>
+            {% endif %}
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Sequence</th>
+                        <th>Operation</th>
+                        <th>Section</th>
+                        <th>Order</th>
+                        <th>Article</th>
+                        <th class="text-end">Input (pcs)</th>
+                        <th class="text-end">Section Output (pcs)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in section_output_rows %}
+                    <tr>
+                        <td>{{ row.created_at__date }}</td>
+                        <td>{{ row.step__sequence }}</td>
+                        <td>{{ row.step__operation_name|default:row.step__section_name }}</td>
+                        <td>{{ row.step__section_name }}</td>
+                        <td>{{ row.step__process__production_order__order_number }}</td>
+                        <td>{{ row.step__process__production_order__article__article_code }}</td>
+                        <td class="text-end">{{ row.input_quantity|floatformat:0 }}</td>
+                        <td class="text-end">{{ row.output_quantity|floatformat:0 }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="8" class="text-center text-muted">No section output is available for the selected factory and filters.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if qa_defect_breakdown and not selected_section %}
 <div class="card shadow-sm mb-4">
     <div class="card-body">
         <h5 class="card-title"><i class="fa-solid fa-bug"></i> Defect Breakdown</h5>
@@ -218,7 +282,7 @@
 </div>
 {% endif %}
 
-{% if qa_daily_summary %}
+{% if qa_daily_summary and not selected_section %}
 <div class="card shadow-sm mb-4">
     <div class="card-body">
         <h5 class="card-title"><i class="fa-solid fa-calendar-days"></i> QA Daily Shift Summary</h5>
@@ -246,18 +310,19 @@
 <div class="row g-3 mb-4">
     <div class="col-md-6">
         <div class="card shadow-sm"><div class="card-body">
-            <h6 class="card-title">Daily Output</h6>
+            <h6 class="card-title">{% if selected_section %}Operation Output{% else %}Daily Output{% endif %}</h6>
             <canvas id="outputChart"></canvas>
         </div></div>
     </div>
     <div class="col-md-6">
         <div class="card shadow-sm"><div class="card-body">
-            <h6 class="card-title">Average Efficiency %</h6>
+            <h6 class="card-title">{% if selected_section %}Operation Efficiency %{% else %}Average Efficiency %{% endif %}</h6>
             <canvas id="efficiencyChart"></canvas>
         </div></div>
     </div>
 </div>
 
+{% if not selected_section %}
 <div class="card shadow-sm mb-4">
     <div class="card-body">
         <h5 class="card-title"><i class="fa-solid fa-shirt"></i> Style Family: All Lines Target Vs Actual</h5>
@@ -348,6 +413,7 @@
         </div>
     </div>
 </div>
+{% endif %}
 
 <div class="modal fade" id="dateFilterModal" tabindex="-1" aria-labelledby="dateFilterModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
@@ -358,6 +424,7 @@
             </div>
             <form method="get">
                 {% if selected_style_id %}<input type="hidden" name="style" value="{{ selected_style_id }}">{% endif %}
+                {% if selected_section_id %}<input type="hidden" name="section" value="{{ selected_section_id }}">{% endif %}
                 <div class="modal-body">
                     <div class="mb-3">
                         <label for="date-from" class="form-label">From date</label>
@@ -384,6 +451,7 @@
             <form method="get">
                 {% if selected_date_from %}<input type="hidden" name="date_from" value="{{ selected_date_from }}">{% endif %}
                 {% if selected_date_to %}<input type="hidden" name="date_to" value="{{ selected_date_to }}">{% endif %}
+                {% if selected_section_id %}<input type="hidden" name="section" value="{{ selected_section_id }}">{% endif %}
                 <div class="modal-body">
                     <div class="form-check mb-2"><input class="form-check-input" type="radio" name="style" id="all-styles" value="" {% if not selected_style_id %}checked{% endif %}><label class="form-check-label" for="all-styles">All styles</label></div>
                     {% for style in styles %}
@@ -391,6 +459,34 @@
                     {% empty %}<p class="text-muted mb-0">No styles have daily production data in this period.</p>{% endfor %}
                 </div>
                 <div class="modal-footer"><button type="submit" class="btn btn-primary"><i class="fa-solid fa-filter"></i> Apply Style</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="sectionOutputFilter" tabindex="-1" aria-labelledby="sectionOutputFilterLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="sectionOutputFilterLabel"><i class="fa-solid fa-filter"></i> Filter Section-wise Output</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="get">
+                {% if selected_style_id %}<input type="hidden" name="style" value="{{ selected_style_id }}">{% endif %}
+                <input type="hidden" name="date_from" value="{{ selected_date_from }}">
+                <input type="hidden" name="date_to" value="{{ selected_date_to }}">
+                <div class="modal-body">
+                    <label for="section-output-select" class="form-label">Operation / section</label>
+                    <select id="section-output-select" name="section" class="form-select">
+                        <option value="">All sections</option>
+                        {% for section in section_output_sections %}
+                        <option value="{{ section.pk }}" {% if section.pk == selected_section_id %}selected{% endif %}>{{ section.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-primary"><i class="fa-solid fa-filter"></i> Apply Section Filter</button>
+                </div>
             </form>
         </div>
     </div>

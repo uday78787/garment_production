@@ -50,7 +50,11 @@ To reset the development database and build a complete demo factory, run
 `python manage.py setup_demo_factory` with `DEBUG=True`. It deletes all database
 data, preserves existing Superuser accounts and their credentials, removes
 non-superuser accounts, and creates linked factory, shift, production, and
-quality sample data. It never creates demo user accounts.
+quality sample data. The demo Article and order include a nine-step section
+flow from Fabric Department through Dispatch Department, with sample batches
+and quality checks so the Admin Dashboard's Section-wise Output report has
+data to filter by factory section, date, and style. It never creates demo user
+accounts.
 Create a Superuser before running this command; that account is used for
 required user-linked demo records.
 
@@ -137,7 +141,9 @@ to the order. Factory workers with Supervisor or QA roles can record section
 batches and quality checks for their factory. Each operation can process only
 quantity passed by the previous operation; QC releases only inspected pieces,
 and failed pieces are scrapped. Partial batches and repeated quality checks
-are supported.
+are supported. Section batches record actual manpower and minutes; the Admin
+Dashboard's operation filter calculates efficiency as output × operation SAM
+divided by available labor minutes, and uses rejected pieces for operation DHU.
 
 ## Running tests
 

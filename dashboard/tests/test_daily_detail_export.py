@@ -8,7 +8,16 @@ from django.utils import timezone
 
 from dashboard.views import _daily_detail_rows, AdminDashboardView
 from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLine
-from planning.models import LineAssignment, ProductionOrder
+from planning.models import (
+    ArticleProcessFlow,
+    ArticleProcessStep,
+    FactorySection,
+    LineAssignment,
+    OrderProcess,
+    ProcessBatch,
+    ProcessQualityCheck,
+    ProductionOrder,
+)
 from production.models import DailyProductionEntry
 from quality.models import HourlyLineCheck, HourlyLineSummary
 
@@ -81,6 +90,167 @@ class DailyDetailExportTests(TestCase):
                 self.assertContains(response, 'id="dashboard-live-content"')
                 self.assertContains(response, 'id="dashboard-live-scripts"')
                 self.assertNotContains(response, "Auto-refreshing in")
+
+    def test_admin_dashboard_filters_section_output_within_selected_factory(self):
+        today = timezone.localdate()
+
+        def create_process_output(factory, order_number, article_code, section_names):
+            article = Article.objects.create(
+                factory=factory,
+                article_code=article_code,
+                article_name=f"{article_code} Article",
+                sam=Decimal("15"),
+            )
+            order = ProductionOrder.objects.create(
+                order_number=order_number,
+                article=article,
+                order_quantity=100,
+                customer_name="Demo Client",
+                delivery_date=today + timedelta(days=30),
+            )
+            sections = [
+                FactorySection.objects.create(
+                    factory=factory,
+                    name=name,
+                    quality_criteria=f"Check {name}.",
+                )
+                for name in section_names
+            ]
+            article_flow = ArticleProcessFlow.objects.create(
+                article=article,
+                factory=factory,
+                created_by=self.user,
+            )
+            for sequence, section in enumerate(sections, start=1):
+                ArticleProcessStep.objects.create(
+                    flow=article_flow,
+                    sequence=sequence,
+                    section=section,
+                    operation_name=f"{section.name} operation",
+                    standard_time_minutes=Decimal("0.50"),
+                )
+            process = OrderProcess.objects.create(
+                factory=factory,
+                production_order=order,
+                source_flow=article_flow,
+                created_by=self.user,
+            )
+            process.create_steps(article_flow)
+            available_input = order.order_quantity
+            for step in process.steps.order_by("sequence"):
+                output_quantity = available_input - 10
+                batch = ProcessBatch.objects.create(
+                    step=step,
+                    input_quantity=available_input,
+                    output_quantity=output_quantity,
+                    actual_manpower=5,
+                    working_minutes=60,
+                    entered_by=self.user,
+                )
+                passed_quantity = output_quantity - 5
+                ProcessQualityCheck.objects.create(
+                    batch=batch,
+                    inspected_quantity=output_quantity,
+                    passed_quantity=passed_quantity,
+                    checked_by=self.user,
+                )
+                available_input = passed_quantity
+            return sections
+
+        own_sections = create_process_output(
+            self.factory,
+            "PO-SECTION",
+            "ART-SECTION",
+            ["Fabric Department", "Dispatch Department"],
+        )
+        assignment = LineAssignment.objects.first()
+        DailyProductionEntry.objects.create(
+            assignment=assignment,
+            production_date=today,
+            actual_manpower=10,
+            working_minutes=60,
+            actual_output=123,
+            planned_efficiency=Decimal("0.50"),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        outside_factory = Factory.objects.create(name="ZZ Other Factory", code="OTHER")
+        outside_sections = create_process_output(
+            outside_factory,
+            "PO-OUTSIDE",
+            "ART-OUTSIDE",
+            ["Outside Factory Section"],
+        )
+
+        response = self.client.get(
+            reverse("dashboard:admin_dashboard"),
+            {"date_from": today.isoformat(), "date_to": today.isoformat()},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [row["step__section_name"] for row in response.context["section_output_rows"]],
+            ["Fabric Department", "Dispatch Department"],
+        )
+        self.assertEqual(
+            [section.name for section in response.context["section_output_sections"]],
+            ["Fabric Department", "Dispatch Department"],
+        )
+        self.assertNotIn(
+            outside_sections[0].name,
+            [section.name for section in response.context["section_output_sections"]],
+        )
+        self.assertContains(response, "Section Output Filter")
+
+        filtered_response = self.client.get(
+            reverse("dashboard:admin_dashboard"),
+            {
+                "date_from": today.isoformat(),
+                "date_to": today.isoformat(),
+                "section": own_sections[1].pk,
+            },
+        )
+
+        self.assertEqual(filtered_response.status_code, 200)
+        filtered_rows = filtered_response.context["section_output_rows"]
+        self.assertEqual(len(filtered_rows), 1)
+        self.assertEqual(filtered_rows[0]["step__section_name"], "Dispatch Department")
+        self.assertEqual(filtered_rows[0]["output_quantity"], 75)
+        self.assertEqual(filtered_response.context["kpi_total_output"], 75)
+        self.assertEqual(filtered_response.context["kpi_total_defects"], 5)
+        self.assertEqual(filtered_response.context["kpi_dhu"], 6.67)
+        self.assertEqual(filtered_response.context["kpi_avg_efficiency"], 12.5)
+        self.assertEqual(
+            filtered_response.context["chart_line_datasets"][0]["data"],
+            [75.0],
+        )
+        self.assertEqual(
+            filtered_response.context["chart_efficiency_series"],
+            [12.5],
+        )
+        self.assertNotContains(filtered_response, "Line Summary Report")
+        self.assertNotContains(filtered_response, "Style Family: All Lines Target Vs Actual")
+        self.assertNotIn(outside_sections[0].name, str(filtered_rows))
+
+        selected_batch = ProcessBatch.objects.get(step__section=own_sections[1])
+        selected_batch.actual_manpower = None
+        selected_batch.working_minutes = None
+        selected_batch.save()
+        missing_efficiency_response = self.client.get(
+            reverse("dashboard:admin_dashboard"),
+            {
+                "date_from": today.isoformat(),
+                "date_to": today.isoformat(),
+                "section": own_sections[1].pk,
+            },
+        )
+        self.assertIsNone(
+            missing_efficiency_response.context["kpi_avg_efficiency"]
+        )
+        self.assertFalse(
+            missing_efficiency_response.context["section_efficiency_available"]
+        )
+        self.assertContains(missing_efficiency_response, "N/A")
 
     def test_admin_dashboard_defaults_to_current_day_for_live_data(self):
         today = timezone.localdate()

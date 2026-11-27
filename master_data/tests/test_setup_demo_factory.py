@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TransactionTestCase, override_settings
+from django.urls import reverse
 
 from accounts.models import UserProfile
 from master_data.models import (
@@ -11,7 +12,17 @@ from master_data.models import (
     LineShiftManpower,
     ProductionLine,
 )
-from planning.models import LineAssignment, ProductionOrder
+from planning.models import (
+    ArticleProcessFlow,
+    ArticleProcessStep,
+    FactorySection,
+    LineAssignment,
+    OrderProcess,
+    OrderProcessStep,
+    ProcessBatch,
+    ProcessQualityCheck,
+    ProductionOrder,
+)
 from production.models import DailyProductionEntry
 from quality.models import (
     DefectMaster,
@@ -59,6 +70,40 @@ class SetupDemoFactoryCommandTests(TransactionTestCase):
         self.assertEqual(LineShiftManpower.objects.count(), 2)
         self.assertEqual(Article.objects.count(), 1)
         self.assertEqual(ProductionOrder.objects.count(), 1)
+        self.assertEqual(FactorySection.objects.count(), 9)
+        self.assertEqual(ArticleProcessFlow.objects.count(), 1)
+        self.assertEqual(ArticleProcessStep.objects.count(), 9)
+        self.assertEqual(OrderProcess.objects.count(), 1)
+        self.assertEqual(OrderProcessStep.objects.count(), 9)
+        self.assertEqual(ProcessBatch.objects.count(), 9)
+        self.assertEqual(ProcessQualityCheck.objects.count(), 9)
+        first_demo_batch = ProcessBatch.objects.order_by("pk").first()
+        self.assertEqual(first_demo_batch.actual_manpower, 24)
+        self.assertEqual(first_demo_batch.working_minutes, 480)
+        self.assertEqual(
+            OrderProcessStep.objects.order_by("sequence").first().operation_details[
+                "standard_time_minutes"
+            ],
+            "2.00",
+        )
+        self.assertEqual(
+            list(
+                OrderProcessStep.objects.order_by("sequence").values_list(
+                    "section_name", flat=True
+                )
+            ),
+            [
+                "Fabric Department",
+                "Trims Department",
+                "Cutting QC",
+                "Embroidery QC",
+                "Stitching QC",
+                "Finishing QC",
+                "Filling QC",
+                "Packing QC",
+                "Dispatch Department",
+            ],
+        )
         self.assertEqual(LineAssignment.objects.count(), 2)
         self.assertEqual(DailyProductionEntry.objects.count(), 6)
         self.assertEqual(DefectMaster.objects.count(), 7)
@@ -66,6 +111,11 @@ class SetupDemoFactoryCommandTests(TransactionTestCase):
         self.assertEqual(HourlyLineCheckDetail.objects.count(), 2)
         self.assertEqual(QualityInspection.objects.count(), 2)
         self.assertEqual(InspectionDefect.objects.count(), 2)
+
+        self.client.force_login(user_model.objects.get(pk=superuser.pk))
+        dashboard_response = self.client.get(reverse("dashboard:admin_dashboard"))
+        self.assertEqual(dashboard_response.status_code, 200)
+        self.assertEqual(len(dashboard_response.context["section_output_rows"]), 9)
 
     @override_settings(DEBUG=True)
     def test_setup_requires_superuser_before_changing_data(self):

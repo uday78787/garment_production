@@ -13,7 +13,7 @@ the templates.
 import json
 import secrets
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, time
 from pathlib import Path
 
@@ -31,7 +31,7 @@ from django.views.generic import TemplateView
 
 from accounts.mixins import AdminRequiredMixin, admin_required
 from master_data.models import Article, Factory, FactoryShift, LineShiftManpower, ProductionLine, ProductionLineShiftAssignment
-from planning.models import LineAssignment, ProductionOrder
+from planning.models import FactorySection, LineAssignment, ProcessBatch, ProductionOrder
 from planning.services.calculations import forecast_daily_output
 from planning.services import calculations as calc
 from production.models import DailyProductionEntry
@@ -986,6 +986,177 @@ class BaseDashboardView(LoginRequiredMixin, TemplateView):
 
 class AdminDashboardView(AdminRequiredMixin, BaseDashboardView):
     template_name = "dashboard/admin_dashboard.html"
+
+    def get_section_output_report(self, factory_id, date_from, date_to, style_id, section_id):
+        sections = FactorySection.objects.none()
+        if not factory_id:
+            return sections, [], None, []
+
+        sections = FactorySection.objects.filter(
+            factory_id=factory_id,
+            active=True,
+            order_steps__process__factory_id=factory_id,
+        ).annotate(
+            first_sequence=Min("order_steps__sequence")
+        ).order_by(
+            "first_sequence",
+            "name",
+        )
+        selected_section = None
+        if section_id and section_id.isdigit():
+            selected_section = sections.filter(pk=int(section_id)).first()
+
+        batches = ProcessBatch.objects.filter(step__process__factory_id=factory_id)
+        if date_from:
+            batches = batches.filter(created_at__date__gte=date_from)
+        if date_to:
+            batches = batches.filter(created_at__date__lte=date_to)
+        if style_id and style_id.isdigit():
+            batches = batches.filter(
+                step__process__production_order__article_id=style_id
+            )
+        if selected_section:
+            batches = batches.filter(step__section_id=selected_section.pk)
+
+        rows = batches.values(
+            "created_at__date",
+            "step__sequence",
+            "step__section_name",
+            "step__operation_name",
+            "step__process__production_order__order_number",
+            "step__process__production_order__article__article_code",
+        ).annotate(
+            input_quantity=Sum("input_quantity"),
+            output_quantity=Sum("output_quantity"),
+        ).order_by(
+            "created_at__date",
+            "step__sequence",
+            "step__process__production_order__order_number",
+        )
+        batch_records = []
+        if selected_section:
+            batch_records = list(
+                batches.select_related(
+                    "step__process__production_order__article"
+                ).prefetch_related("quality_checks")
+            )
+        return sections, rows, selected_section, batch_records
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        sections, rows, selected_section, batch_records = self.get_section_output_report(
+            self.get_auto_selected_factory_id(),
+            context["selected_date_from"],
+            context["selected_date_to"],
+            self.request.GET.get("style"),
+            self.request.GET.get("section"),
+        )
+        context["section_output_sections"] = sections
+        context["section_output_rows"] = rows
+        context["selected_section"] = selected_section
+        context["selected_section_id"] = selected_section.pk if selected_section else None
+        context["section_efficiency_available"] = False
+        if selected_section:
+            total_output = 0
+            total_inspected = 0
+            total_rejected = 0
+            produced_standard_minutes = Decimal("0")
+            available_labor_minutes = Decimal("0")
+            efficiency_complete = bool(batch_records)
+            daily_metrics = {}
+
+            for batch in batch_records:
+                batch_date = timezone.localdate(batch.created_at)
+                daily = daily_metrics.setdefault(
+                    batch_date,
+                    {
+                        "output": 0,
+                        "produced_standard_minutes": Decimal("0"),
+                        "available_labor_minutes": Decimal("0"),
+                        "complete": True,
+                    },
+                )
+                total_output += batch.output_quantity
+                daily["output"] += batch.output_quantity
+                for check in batch.quality_checks.all():
+                    total_inspected += check.inspected_quantity
+                    total_rejected += check.rejected_quantity
+
+                sam_value = batch.step.operation_details.get("standard_time_minutes")
+                try:
+                    operation_sam = Decimal(str(sam_value)) if sam_value not in (None, "") else None
+                except (InvalidOperation, TypeError, ValueError):
+                    operation_sam = None
+                if operation_sam is not None and not operation_sam.is_finite():
+                    operation_sam = None
+
+                if (
+                    operation_sam is None
+                    or batch.actual_manpower is None
+                    or batch.working_minutes is None
+                ):
+                    efficiency_complete = False
+                    daily["complete"] = False
+                    continue
+
+                standard_minutes = Decimal(batch.output_quantity) * operation_sam
+                labor_minutes = Decimal(batch.actual_manpower) * Decimal(batch.working_minutes)
+                produced_standard_minutes += standard_minutes
+                available_labor_minutes += labor_minutes
+                daily["produced_standard_minutes"] += standard_minutes
+                daily["available_labor_minutes"] += labor_minutes
+
+            context["kpi_total_output"] = total_output
+            context["kpi_total_defects"] = total_rejected
+            context["kpi_dhu"] = round(
+                total_rejected / total_inspected * 100,
+                2,
+            ) if total_inspected else 0
+            context["section_efficiency_available"] = (
+                efficiency_complete and available_labor_minutes > 0
+            )
+            context["kpi_avg_efficiency"] = (
+                round(
+                    float(produced_standard_minutes / available_labor_minutes * 100),
+                    2,
+                )
+                if context["section_efficiency_available"]
+                else None
+            )
+
+            dates = sorted(daily_metrics)
+            context["chart_labels"] = [day.strftime("%d-%b") for day in dates]
+            context["chart_line_datasets"] = [{
+                "label": selected_section.name,
+                "data": [float(daily_metrics[day]["output"]) for day in dates],
+                "borderColor": "#0d6efd",
+                "backgroundColor": "#0d6efd",
+                "tension": 0.25,
+                "spanGaps": False,
+            }]
+            context["chart_efficiency_series"] = [
+                round(
+                    float(
+                        daily_metrics[day]["produced_standard_minutes"]
+                        / daily_metrics[day]["available_labor_minutes"]
+                        * 100
+                    ),
+                    2,
+                )
+                if (
+                    daily_metrics[day]["complete"]
+                    and daily_metrics[day]["available_labor_minutes"] > 0
+                )
+                else None
+                for day in dates
+            ]
+            context["qa_defect_breakdown"] = []
+            context["qa_daily_summary"] = []
+            context["forecast_assignments"] = []
+            context["line_output"] = []
+            context["line_summary_report"] = []
+            context["daily_detail"] = []
+        return context
 
     def get_scoped_entries(self):
         user = self.request.user

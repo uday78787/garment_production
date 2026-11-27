@@ -16,7 +16,16 @@ from master_data.models import (
     ProductionLine,
     ProductionLineShiftAssignment,
 )
-from planning.models import LineAssignment, ProductionOrder
+from planning.models import (
+    ArticleProcessFlow,
+    ArticleProcessStep,
+    FactorySection,
+    LineAssignment,
+    OrderProcess,
+    ProcessBatch,
+    ProcessQualityCheck,
+    ProductionOrder,
+)
 from production.models import DailyProductionEntry
 from quality.models import (
     DefectMaster,
@@ -171,6 +180,40 @@ class Command(BaseCommand):
             delivery_date=today + timedelta(days=30),
             status=ProductionOrder.Status.IN_PROGRESS,
         )
+        section_names = (
+            "Fabric Department",
+            "Trims Department",
+            "Cutting QC",
+            "Embroidery QC",
+            "Stitching QC",
+            "Finishing QC",
+            "Filling QC",
+            "Packing QC",
+            "Dispatch Department",
+        )
+        sections = [
+            FactorySection.objects.create(
+                factory=factory,
+                name=name,
+                quality_criteria=f"Follow the demo {name} quality checklist.",
+            )
+            for name in section_names
+        ]
+        article_flow = ArticleProcessFlow.objects.create(
+            article=article,
+            factory=factory,
+            created_by=actor,
+        )
+        for sequence, section in enumerate(sections, start=1):
+            ArticleProcessStep.objects.create(
+                flow=article_flow,
+                sequence=sequence,
+                section=section,
+                operation_name=f"{section.name} operation",
+                operation_description=f"Process the garment through {section.name}.",
+                standard_time_minutes=Decimal("2.00"),
+                quality_checkpoint=f"Check quality before releasing from {section.name}.",
+            )
         DefectMaster.seed_default_defects()
         broken_stitch = DefectMaster.objects.get(defect_code="DCL-001")
 
@@ -187,6 +230,35 @@ class Command(BaseCommand):
                 max_efficiency=Decimal("0.60"),
                 status=LineAssignment.Status.ACTIVE,
             )
+            if line_index == 0:
+                order_process = OrderProcess.objects.create(
+                    factory=factory,
+                    production_order=order,
+                    source_flow=article_flow,
+                    created_by=actor,
+                )
+                order_process.create_steps(article_flow)
+                available_input = order.order_quantity
+                for step in order_process.steps.order_by("sequence"):
+                    section_output = available_input - 10
+                    batch = ProcessBatch.objects.create(
+                        step=step,
+                        input_quantity=available_input,
+                        output_quantity=section_output,
+                        actual_manpower=24,
+                        working_minutes=480,
+                        notes="Sample section output for the demo factory.",
+                        entered_by=actor,
+                    )
+                    passed_quantity = section_output - 5
+                    ProcessQualityCheck.objects.create(
+                        batch=batch,
+                        inspected_quantity=section_output,
+                        passed_quantity=passed_quantity,
+                        remarks="Sample section quality check.",
+                        checked_by=actor,
+                    )
+                    available_input = passed_quantity
             for day_offset, (efficiency, output) in enumerate(
                 (
                     (Decimal("0.45"), 180 + (line_index * 10)),

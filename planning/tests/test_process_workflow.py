@@ -142,6 +142,19 @@ class FactoryProcessWorkflowTests(TestCase):
         self.assertEqual(embroidery_step.available_input_quantity, 0)
         self.assertEqual(fabric_step.passed_quantity, 0)
 
+    def test_batch_requires_manpower_and_minutes_together(self):
+        with self.assertRaisesMessage(
+            ValidationError,
+            "Enter both actual manpower and working minutes",
+        ):
+            ProcessBatch.objects.create(
+                step=self.process.steps.first(),
+                input_quantity=10,
+                output_quantity=10,
+                actual_manpower=5,
+                entered_by=self.superuser,
+            )
+
     def test_qc_cannot_inspect_more_than_batch_output_or_pass_more_than_inspected(self):
         first_step = self.process.steps.first()
         batch = self._batch(first_step, 10, 8)
@@ -200,8 +213,12 @@ class FactoryProcessWorkflowTests(TestCase):
         missing_field_form = ProcessBatchForm(data=form_data, step=step)
         self.assertFalse(missing_field_form.is_valid())
         self.assertIn("field_fabric_lot", missing_field_form.errors)
+        self.assertIn("actual_manpower", missing_field_form.errors)
+        self.assertIn("working_minutes", missing_field_form.errors)
 
         form_data["field_fabric_lot"] = "LOT-100"
+        form_data["actual_manpower"] = "5"
+        form_data["working_minutes"] = "60"
         valid_form = ProcessBatchForm(data=form_data, step=step)
         self.assertTrue(valid_form.is_valid(), valid_form.errors)
         batch = valid_form.save(commit=False)
@@ -433,7 +450,13 @@ class FactoryProcessWorkflowTests(TestCase):
                 "production:process_batch_create",
                 args=[self.process.pk, fabric_step.pk],
             ),
-            {"input_quantity": "100", "output_quantity": "100", "notes": ""},
+            {
+                "input_quantity": "100",
+                "output_quantity": "100",
+                "actual_manpower": "10",
+                "working_minutes": "60",
+                "notes": "",
+            },
         )
         self.assertEqual(response.status_code, 302)
         fabric_batch = fabric_step.batches.get()
@@ -443,7 +466,13 @@ class FactoryProcessWorkflowTests(TestCase):
                 "production:process_batch_create",
                 args=[self.process.pk, embroidery_step.pk],
             ),
-            {"input_quantity": "1", "output_quantity": "1", "notes": ""},
+            {
+                "input_quantity": "1",
+                "output_quantity": "1",
+                "actual_manpower": "10",
+                "working_minutes": "60",
+                "notes": "",
+            },
         )
         self.assertEqual(blocked_response.status_code, 200)
         self.assertContains(blocked_response, "Only 0 pcs are available")

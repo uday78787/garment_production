@@ -575,6 +575,18 @@ class ProcessBatch(TimeStampedModel):
     )
     input_quantity = models.PositiveIntegerField()
     output_quantity = models.PositiveIntegerField()
+    actual_manpower = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)],
+        help_text="Operators who worked on this section batch.",
+    )
+    working_minutes = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)],
+        help_text="Minutes spent processing this section batch.",
+    )
     field_values = models.JSONField(default=dict, blank=True)
     notes = models.TextField(blank=True)
     entered_by = models.ForeignKey(
@@ -588,6 +600,10 @@ class ProcessBatch(TimeStampedModel):
 
     def clean(self):
         super().clean()
+        if (self.actual_manpower is None) != (self.working_minutes is None):
+            raise ValidationError(
+                "Enter both actual manpower and working minutes for a section batch."
+            )
         if self.input_quantity is not None and self.input_quantity <= 0:
             raise ValidationError({"input_quantity": "Input quantity must be greater than zero."})
         if (
